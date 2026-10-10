@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# סודות וקובצי סביבה (רק .env.example נכנס לגיט)
+.env
+.env.*
+!.env.example
+
+.DS_Store
+npm-debug.log*
+coverage/
+test-results/

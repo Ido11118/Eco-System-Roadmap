@@ -1,0 +1,41 @@
+# הרצה מקומית/פנימית מלאה: docker compose up -d --build
+# לפני ההרצה: הגדר סיסמאות אמיתיות (מומלץ בקובץ .env לצד קובץ זה).
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: workplan
+      POSTGRES_USER: workplan
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workplan"]
+      interval: 5s
+      retries: 10
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://workplan:${DB_PASSWORD}@db:5432/workplan
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      SUPERUSER_EMAIL: ${SUPERUSER_EMAIL:?set SUPERUSER_EMAIL}
+      SUPERUSER_PASSWORD: ${SUPERUSER_PASSWORD:?set SUPERUSER_PASSWORD}
+      SUPERUSER_NAME: ${SUPERUSER_NAME:-מנהל המערכת}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      LOG_RESET_LINKS: ${LOG_RESET_LINKS:-false}
+    ports:
+      - "3000:3000"
+volumes:
+  pgdata:

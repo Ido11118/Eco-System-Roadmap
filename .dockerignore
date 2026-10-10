@@ -1,0 +1,13 @@
+# לא מעתיקים לתוך ה-image: תלויות של המחשב המקומי (בינאריים של macOS), תוצרי בנייה וסודות
+node_modules
+.next
+.git
+.env
+.env.*
+!.env.example
+.DS_Store
+npm-debug.log*
+coverage
+test-results
+tests
+docs

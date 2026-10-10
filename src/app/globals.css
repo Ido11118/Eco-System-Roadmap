@@ -1,0 +1,80 @@
+@import "@fontsource/heebo/300.css";
+@import "@fontsource/heebo/400.css";
+@import "@fontsource/heebo/500.css";
+@import "@fontsource/heebo/600.css";
+@import "@fontsource/heebo/700.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f4f6f9;
+  --panel: #ffffff;
+  --line: #e3e7ee;
+  --line-strong: #cfd6e0;
+  --grid: #eef1f5;
+  --header: #f8fafc;
+  --today: rgba(37, 99, 235, 0.07);
+  --today-strong: #2563eb;
+}
+
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: #0f172a;
+  font-family: Heebo, system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { scrollbar-width: thin; scrollbar-color: #c3cad6 transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #c3cad6; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-transparent px-3 h-8 text-[13px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none whitespace-nowrap;
+  }
+  .btn-primary { @apply btn bg-brand-600 text-white hover:bg-brand-700; }
+  .btn-secondary { @apply btn bg-white border-ink-200 text-ink-700 hover:bg-ink-50 hover:border-ink-300; }
+  .btn-ghost { @apply btn text-ink-700 hover:bg-ink-100; }
+  .btn-danger { @apply btn bg-red-600 text-white hover:bg-red-700; }
+  .btn-sm { @apply h-7 px-2 text-[12px]; }
+  .icon-btn { @apply inline-flex items-center justify-center h-7 w-7 rounded-md text-ink-500 hover:bg-ink-100 hover:text-ink-900 transition-colors; }
+  .input {
+    @apply h-8 w-full rounded-md border border-ink-200 bg-white px-2.5 text-[13px] text-ink-900 placeholder:text-ink-400 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-ink-50 disabled:text-ink-500;
+  }
+  textarea.input { @apply h-auto py-2 leading-relaxed; }
+  .label { @apply block text-[12px] font-medium text-ink-500 mb-1; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full border border-ink-200 bg-white px-2 h-6 text-[12px] text-ink-700; }
+  .card { @apply rounded-xl border border-ink-200 bg-white; }
+  .kbd { @apply rounded border border-ink-200 bg-ink-50 px-1 text-[11px] text-ink-500; }
+}
+
+/* ---------- Gantt ---------- */
+.gantt-scroll { overscroll-behavior: contain; }
+.gantt-timeline {
+  background-image: linear-gradient(to left, var(--grid) 1px, transparent 1px);
+  background-size: var(--week-w) 100%;
+  background-position: right top;
+}
+.gantt-month-start { box-shadow: inset -1px 0 0 var(--line-strong); }
+.gantt-bar { transition: box-shadow .12s, transform .12s; }
+.gantt-bar:hover { box-shadow: 0 2px 8px rgba(15, 23, 42, .18); }
+.gantt-bar.dragging { opacity: .9; box-shadow: 0 6px 18px rgba(15, 23, 42, .25); z-index: 30; }
+.plan-ghost {
+  background: repeating-linear-gradient(-45deg, rgba(100,116,139,.10) 0 4px, rgba(100,116,139,.02) 4px 8px);
+  border: 1.5px dashed #64748b;
+}
+.select-range { background: rgba(37, 99, 235, .14); outline: 1.5px solid rgba(37, 99, 235, .6); }
+.readonly-hatch { background-color: #fcfcfd; }
+.gantt-timeline.readonly-hatch {
+  background-image: linear-gradient(to left, var(--grid) 1px, transparent 1px), repeating-linear-gradient(-45deg, rgba(148,163,184,.07) 0 6px, transparent 6px 12px);
+  background-size: var(--week-w) 100%, auto;
+}
+
+@keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.anim-in { animation: fadein .14s ease-out; }
+@keyframes slidein { from { transform: translateX(-16px); opacity: 0; } to { transform: none; opacity: 1; } }
+.anim-drawer { animation: slidein .16s ease-out; }
