@@ -12,7 +12,7 @@ export async function ensureSuperUser() {
     console.log("! SUPERUSER_EMAIL / SUPERUSER_PASSWORD not set — skipping super user bootstrap");
     return;
   }
-  if (password.length < 10) throw new Error("SUPERUSER_PASSWORD must be at least 10 characters");
+  if (password.length < 8) throw new Error("SUPERUSER_PASSWORD must be at least 8 characters");
   const [existingSuper] = await db.select().from(users).where(eq(users.role, "SUPER"));
   if (existingSuper) {
     console.log(`✓ super user already exists (${existingSuper.email}) — not modified`);
