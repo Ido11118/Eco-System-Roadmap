@@ -16,7 +16,7 @@ import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/dialog";
 import { shiftTime, timeLabel, defaultViewConfig, CROSS_FILTER } from "./filters";
 import { CROSS_ROW_LABELS } from "@/lib/constants";
-import { sanitizeView, TEXT_SIZES, useTextSize } from "./prefs";
+import { sanitizeView, TEXT_SIZES, useTextSize, useBarFontSize, BAR_FONT } from "./prefs";
 import { useMe } from "./ui";
 
 export type SavedView = { id: number; name: string; config: ViewConfig; isDefault: boolean };
@@ -235,6 +235,7 @@ function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v
   const btn = useRef<HTMLButtonElement>(null);
   const me = useMe();
   const [textSize, setTextSize] = useTextSize(me?.preferences ?? {});
+  const [barFont, setBarFont] = useBarFontSize(me?.preferences ?? {});
   const Seg = <T extends string>({ value, options, onChange, testid }: { value: T; options: { key: T; label: string }[]; onChange: (v: T) => void; testid: string }) => (
     <div className="flex gap-1" data-testid={testid}>
       {options.map((o) => (
@@ -254,6 +255,20 @@ function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v
             <div className="label">גודל תצוגה (טקסט וכל הממשק)</div>
             <Seg value={textSize} options={TEXT_SIZES} onChange={setTextSize} testid="text-size" />
           </div>
+          {mode !== "table" && (
+            <div>
+              <div className="label flex items-center justify-between">
+                <span>גודל הטקסט בקוביות</span>
+                <span className="tabular-nums text-ink-700" data-testid="bar-font-value">{barFont}px</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-ink-400">א</span>
+                <input type="range" min={BAR_FONT.min} max={BAR_FONT.max} step={1} value={barFont} className="flex-1 accent-brand-600"
+                  onChange={(e) => setBarFont(Number(e.target.value))} aria-label="גודל הטקסט בקוביות" data-testid="bar-font" />
+                <span className="text-[15px] text-ink-400">א</span>
+              </div>
+            </div>
+          )}
           {mode !== "table" && (
             <div>
               <div className="label">צפיפות הגאנט (רוחב שבוע וגובה שורה)</div>

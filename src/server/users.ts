@@ -153,7 +153,11 @@ function appUrl() {
   return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
 }
 
-async function createResetToken(userId: number, q: Pick<typeof db, "insert"> = db) {
+export function resetLinkFor(token: string) {
+  return `${appUrl()}/reset?token=${token}`;
+}
+
+export async function createResetToken(userId: number, q: Pick<typeof db, "insert"> = db) {
   const token = randomToken();
   await q.insert(passwordResetTokens).values({ id: sha256(token), userId, expiresAt: new Date(Date.now() + 60 * 60000) });
   return token;
@@ -185,5 +189,18 @@ export async function resetPassword(token: string, password: string) {
     await tx.update(users).set({ passwordHash, updatedAt: new Date() }).where(eq(users.id, t.userId));
     await tx.delete(sessions).where(eq(sessions.userId, t.userId));
     await audit(tx, t.userId, "user", t.userId, "passwordReset", null, "הסיסמה אופסה");
+  });
+}
+
+/** שינוי סיסמה מתוך "הגדרות": דורש את הסיסמה הנוכחית. שאר החיבורים של המשתמש (מכשירים אחרים) מנותקים. */
+export async function changePassword(me: Me, current: string, next: string, keepSessionId: string | null) {
+  const [u] = await db.select().from(users).where(eq(users.id, me.id));
+  if (!u || !(await bcrypt.compare(current, u.passwordHash))) throw new ApiError(400, "הסיסמה הנוכחית שגויה");
+  if (current === next) throw new ApiError(400, "הסיסמה החדשה זהה לנוכחית");
+  const passwordHash = await bcrypt.hash(next, 12);
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ passwordHash, updatedAt: new Date() }).where(eq(users.id, me.id));
+    await tx.delete(sessions).where(keepSessionId ? and(eq(sessions.userId, me.id), sql`${sessions.id} <> ${keepSessionId}`) : eq(sessions.userId, me.id));
+    await audit(tx, me.id, "user", me.id, "passwordChange", null, "המשתמש שינה סיסמה");
   });
 }

@@ -460,3 +460,19 @@ export async function itemHistory(entityType: string, entityId: number) {
 }
 
 export { inArray };
+
+/**
+ * מחיקה לצמיתות של תכולות שנמחקו (מנהל המערכת בלבד). רק תכולות שכבר מסומנות כמחוקות.
+ * תמונות מצב ישנות לא מושפעות (הן עותק נפרד). היומן נשמר.
+ */
+export async function purgeDeletedItems(me: Me, ids: number[]) {
+  if (me.role !== "SUPER") throw new ApiError(403, "פעולה זו מותרת למנהל המערכת בלבד");
+  const uniq = [...new Set(ids)];
+  if (!uniq.length) return { purged: 0 };
+  return db.transaction(async (tx) => {
+    const gone = await tx.delete(workItems).where(and(inArray(workItems.id, uniq), sql`${workItems.deletedAt} is not null`))
+      .returning({ id: workItems.id, name: workItems.name });
+    for (const g of gone) await audit(tx, me.id, "item", g.id, "purge", null, `נמחקה לצמיתות תכולה "${g.name}"`);
+    return { purged: gone.length };
+  });
+}

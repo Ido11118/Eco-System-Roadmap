@@ -16,6 +16,7 @@ import type * as schema from "@/db/schema";
 type Db = NodePgDatabase<typeof schema>;
 export const CATALOG_FILE = path.join(process.cwd(), "config", "catalog.json");
 const HASH_KEY = "catalog_file_hash";
+const CONTENT_KEY = "catalog_file_content"; // תוכן הקובץ שהוחל לאחרונה — להשוואה תלת-כיוונית
 
 type FileStatus = { key: string; label: string; bg: string; fg: string; border: string; category: string; noteRecommended: boolean; sortOrder: number; isDefault: boolean; archived: boolean; replacedBy: string | null };
 type FilePriority = { key: string; label: string; color: string; sortOrder: number; isDefault: boolean; archived: boolean; replacedBy: string | null };
@@ -50,6 +51,7 @@ export async function writeCatalogFile(db: Db): Promise<boolean> {
     fs.mkdirSync(path.dirname(CATALOG_FILE), { recursive: true });
     fs.writeFileSync(CATALOG_FILE, text);
     await setHash(db, hashOf(text)); // אותה גרסה כבר "מוחלת" כאן — האתחול הבא לא יחיל אותה שוב
+    await setSetting(db, CONTENT_KEY, text);
     return true;
   } catch (e) {
     console.error("[catalog] failed to write config/catalog.json", e);
@@ -57,45 +59,60 @@ export async function writeCatalogFile(db: Db): Promise<boolean> {
   }
 }
 
-async function setHash(db: Db, hash: string) {
-  await db.insert(appSettings).values({ key: HASH_KEY, value: hash })
-    .onConflictDoUpdate({ target: appSettings.key, set: { value: hash, updatedAt: new Date() } });
+async function setSetting(db: Db, key: string, value: string) {
+  await db.insert(appSettings).values({ key, value })
+    .onConflictDoUpdate({ target: appSettings.key, set: { value, updatedAt: new Date() } });
 }
+const setHash = (db: Db, hash: string) => setSetting(db, HASH_KEY, hash);
 
 /**
- * החלת הקובץ על בסיס הנתונים — רק אם השתנה מאז ההחלה האחרונה.
- * לפי מפתח: מעדכן ערכים קיימים, מוסיף חדשים, ומעביר תכולות מערך שנמחק (archived + replacedBy) לחלופה.
+ * החלת הקובץ על בסיס הנתונים — רק אם השתנה מאז ההחלה האחרונה, ורק הערכים שהשתנו בו (השוואה תלת-כיוונית):
+ * משווים כל ערך בקובץ לגרסת הקובץ שהוחלה בפעם הקודמת. ערך שלא השתנה בקובץ — לא נוגעים בו בבסיס הנתונים,
+ * כך ששינויים שנעשו ישירות בסביבה הזו (למשל צבע שמנהל המערכת שינה בפרודקשן) נשמרים.
+ * ערכים חדשים בקובץ נוספים; ערך שנמחק בקובץ (archived + replacedBy) — התכולות שלו מועברות לחלופה.
  * ערכים שקיימים רק בבסיס הנתונים (נוצרו ישירות בסביבה הזו) לא נמחקים.
  */
 export async function applyCatalogFile(db: Db): Promise<"applied" | "unchanged" | "missing"> {
   if (!fs.existsSync(CATALOG_FILE)) return "missing";
   const text = fs.readFileSync(CATALOG_FILE, "utf8");
   const hash = hashOf(text);
-  const [cur] = await db.select().from(appSettings).where(eq(appSettings.key, HASH_KEY));
-  if (cur?.value === hash) return "unchanged";
+  const settings = await db.select().from(appSettings);
+  const get = (k: string) => settings.find((x) => x.key === k)?.value;
+  if (get(HASH_KEY) === hash) {
+    if (!get(CONTENT_KEY)) await setSetting(db, CONTENT_KEY, text); // לגרסאות קודמות שלא שמרו תוכן
+    return "unchanged";
+  }
   const file = JSON.parse(text) as CatalogFile;
   validate(file);
+  let prev: CatalogFile | null = null;
+  try { prev = get(CONTENT_KEY) ? JSON.parse(get(CONTENT_KEY)!) as CatalogFile : null; } catch { prev = null; }
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const changedS = file.statuses.filter((x) => !same(x, prev?.statuses.find((p) => p.key === x.key)));
+  const changedP = file.priorities.filter((x) => !same(x, prev?.priorities.find((p) => p.key === x.key)));
+  const defS = file.statuses.find((x) => x.isDefault)?.key, prevDefS = prev?.statuses.find((x) => x.isDefault)?.key;
+  const defP = file.priorities.find((x) => x.isDefault)?.key, prevDefP = prev?.priorities.find((x) => x.isDefault)?.key;
   await db.transaction(async (tx) => {
-    // ברירת מחדל: מנקים קודם (אינדקס ייחודי חלקי — רק אחד יכול להיות ברירת מחדל)
-    await tx.update(statuses).set({ isDefault: false });
-    for (const s of file.statuses) {
-      const v = { label: s.label, bg: s.bg, fg: s.fg, border: s.border, category: s.category, noteRecommended: s.noteRecommended, sortOrder: s.sortOrder, isDefault: s.isDefault, archived: s.archived, replacedBy: s.replacedBy };
-      await tx.insert(statuses).values({ key: s.key, ...v }).onConflictDoUpdate({ target: statuses.key, set: v });
+    for (const s of changedS) {
+      const v = { label: s.label, bg: s.bg, fg: s.fg, border: s.border, category: s.category, noteRecommended: s.noteRecommended, sortOrder: s.sortOrder, archived: s.archived, replacedBy: s.replacedBy };
+      await tx.insert(statuses).values({ key: s.key, ...v, isDefault: false }).onConflictDoUpdate({ target: statuses.key, set: v });
     }
-    await tx.update(priorities).set({ isDefault: false });
-    for (const p of file.priorities) {
-      const v = { label: p.label, color: p.color, sortOrder: p.sortOrder, isDefault: p.isDefault, archived: p.archived, replacedBy: p.replacedBy };
-      await tx.insert(priorities).values({ key: p.key, ...v }).onConflictDoUpdate({ target: priorities.key, set: v });
+    for (const p of changedP) {
+      const v = { label: p.label, color: p.color, sortOrder: p.sortOrder, archived: p.archived, replacedBy: p.replacedBy };
+      await tx.insert(priorities).values({ key: p.key, ...v, isDefault: false }).onConflictDoUpdate({ target: priorities.key, set: v });
     }
+    // ברירת מחדל — רק אם השתנתה בקובץ (אינדקס ייחודי חלקי: קודם מנקים, אחר כך מסמנים)
+    if (defS && defS !== prevDefS) { await tx.update(statuses).set({ isDefault: false }); await tx.update(statuses).set({ isDefault: true }).where(eq(statuses.key, defS)); }
+    if (defP && defP !== prevDefP) { await tx.update(priorities).set({ isDefault: false }); await tx.update(priorities).set({ isDefault: true }).where(eq(priorities.key, defP)); }
     // ערכים שנמחקו בקובץ עם חלופה — מעבירים אליה את התכולות של הסביבה הזו
-    for (const s of file.statuses.filter((x) => x.archived && x.replacedBy)) {
+    for (const s of changedS.filter((x) => x.archived && x.replacedBy)) {
       await tx.update(workItems).set({ status: s.replacedBy!, version: sql`${workItems.version} + 1`, updatedAt: new Date() }).where(eq(workItems.status, s.key));
     }
-    for (const p of file.priorities.filter((x) => x.archived && x.replacedBy)) {
+    for (const p of changedP.filter((x) => x.archived && x.replacedBy)) {
       await tx.update(workItems).set({ priority: p.replacedBy!, version: sql`${workItems.version} + 1`, updatedAt: new Date() }).where(eq(workItems.priority, p.key));
     }
-    await tx.insert(appSettings).values({ key: HASH_KEY, value: hash })
-      .onConflictDoUpdate({ target: appSettings.key, set: { value: hash, updatedAt: new Date() } });
+    for (const [k, v] of [[HASH_KEY, hash], [CONTENT_KEY, text]] as const) {
+      await tx.insert(appSettings).values({ key: k, value: v }).onConflictDoUpdate({ target: appSettings.key, set: { value: v, updatedAt: new Date() } });
+    }
   });
   return "applied";
 }

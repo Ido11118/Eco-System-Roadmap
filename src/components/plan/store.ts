@@ -25,16 +25,17 @@ export interface PlanStore {
   canEditRow: (row: RowDTO | undefined) => boolean;
   canEditDomain: (domainId: number) => boolean;
   createItem: (v: NewItem) => Promise<ItemDTO | null>;
-  updateItem: (item: ItemDTO, patch: ItemPatch, opts?: { undoLabel?: string; silent?: boolean }) => Promise<boolean>;
+  /** noUndo: שינוי שהוא עצמו ביטול (לא נכנס לרשימת הביטולים) */
+  updateItem: (item: ItemDTO, patch: ItemPatch, opts?: { undoLabel?: string; silent?: boolean; noUndo?: boolean }) => Promise<boolean>;
   bulkUpdate: (items: ItemDTO[], patch: { status?: string; priority?: string }) => Promise<boolean>;
   deleteItem: (item: ItemDTO) => Promise<void>;
   createRow: (teamId: number, anchorRowId?: number, position?: "above" | "below") => Promise<number | null>;
   deleteRow: (row: RowDTO, opts?: { silent?: boolean }) => Promise<void>;
   createMilestone: (v: MsInput) => Promise<boolean>;
-  updateMilestone: (m: MilestoneDTO, patch: Partial<MsInput>) => Promise<boolean>;
+  updateMilestone: (m: MilestoneDTO, patch: Partial<MsInput>, opts?: { noUndo?: boolean }) => Promise<boolean>;
   deleteMilestone: (m: MilestoneDTO) => Promise<boolean>;
   createSprint: (v: SprintInput) => Promise<boolean>;
-  updateSprint: (s: SprintDTO, patch: Partial<SprintInput>) => Promise<boolean>;
+  updateSprint: (s: SprintDTO, patch: Partial<SprintInput>, opts?: { noUndo?: boolean }) => Promise<boolean>;
   deleteSprint: (s: SprintDTO) => Promise<boolean>;
   undo: () => void;
   refresh: () => void;
@@ -143,6 +144,18 @@ export function useLivePlan(me: Me): PlanStore {
   const replaceItem = useCallback((it: ItemDTO) => setData((d) => ({ ...d, items: d.items.map((x) => (x.id === it.id ? it : x)) })), [setData]);
   const curItem = (id: number) => dataRef.current?.items.find((x) => x.id === id);
 
+  const cat = useCatalog();
+  /** תיאור קצר של שינוי בתכולה — מוצג בהודעה עם "ביטול" */
+  const describePatch = useCallback((item: ItemDTO, patch: ItemPatch) => {
+    const n = `"${item.name}"`;
+    if (patch.status) return `הסטטוס של ${n} שונה ל"${cat.status(patch.status).label}"`;
+    if (patch.priority) return `התיעדוף של ${n} שונה ל"${cat.priority(patch.priority).label}"`;
+    if (patch.name !== undefined) return `השם שונה ל"${patch.name}"`;
+    if (patch.notes !== undefined) return `ההערות של ${n} עודכנו`;
+    if (patch.rowId !== undefined) return `${n} הועברה`;
+    if (patch.startWeek || patch.endWeek) return `טווח השבועות של ${n} שונה`;
+    return `${n} עודכנה`;
+  }, [cat]);
   const updateItemRef = useRef<PlanStore["updateItem"]>(async () => false);
   const updateItem: PlanStore["updateItem"] = useCallback((item, patch, opts) => track(async () => {
     const d = dataRef.current;
@@ -157,15 +170,16 @@ export function useLivePlan(me: Me): PlanStore {
     try {
       const upd = await api<ItemDTO>("PATCH", `/api/items/${item.id}`, { version: item.version, patch });
       replaceItem(upd);
-      if (opts?.undoLabel) {
-        pushUndo({ label: opts.undoLabel, run: async () => {
+      // כל שינוי ניתן לביטול (Ctrl+Z או "ביטול" בהודעה) — חוץ משינוי שהוא עצמו ביטול
+      if (!opts?.noUndo) {
+        pushUndo({ label: opts?.undoLabel ?? describePatch(item, patch), run: async () => {
           const cur = curItem(item.id);
-          return cur ? updateItemRef.current(cur, before, { silent: true }) : false;
-        } }, !opts.silent);
+          return cur ? updateItemRef.current(cur, before, { silent: true, noUndo: true }) : false;
+        } }, !opts?.silent);
       } else if (!opts?.silent) toast.show("success", "נשמר");
       return true;
     } catch (e) { fail(e); return false; }
-  }), [fail, pushUndo, replaceItem, toast, track]);
+  }), [fail, pushUndo, replaceItem, toast, track, describePatch]);
   updateItemRef.current = updateItem;
 
   const createItem: PlanStore["createItem"] = useCallback((v) => track(async () => {
@@ -194,10 +208,15 @@ export function useLivePlan(me: Me): PlanStore {
       const upd = await api<ItemDTO[]>("POST", "/api/items/bulk", { entries: items.map((i) => ({ id: i.id, version: i.version })), patch });
       const byId = new Map(upd.map((u) => [u.id, u]));
       setData((d) => ({ ...d, items: d.items.map((x) => byId.get(x.id) ?? x) }));
-      toast.show("success", `עודכנו ${upd.length} תכולות`);
+      const before = items.map((it) => ({ id: it.id, patch: { ...(patch.status ? { status: it.status } : {}), ...(patch.priority ? { priority: it.priority } : {}) } }));
+      pushUndo({ label: `עודכנו ${upd.length} תכולות`, run: async () => {
+        let ok = true;
+        for (const b of before) { const cur = curItem(b.id); if (cur) ok = (await updateItemRef.current(cur, b.patch, { silent: true, noUndo: true })) && ok; }
+        return ok;
+      } });
       return true;
     } catch (e) { fail(e); return false; }
-  }), [fail, replaceItem, setData, toast, track]);
+  }), [fail, replaceItem, setData, toast, track, pushUndo]);
 
   const deleteItem: PlanStore["deleteItem"] = useCallback((item) => track(async () => {
     const cur = curItem(item.id) ?? item;
@@ -243,18 +262,29 @@ export function useLivePlan(me: Me): PlanStore {
     try {
       const m = await api<MilestoneDTO>("POST", "/api/milestones", v);
       setData((d) => ({ ...d, milestones: [...d.milestones, m] }));
-      toast.show("success", "אבן הדרך נוספה");
+      pushUndo({ label: `נוספה אבן דרך "${m.name}"`, run: () => track(async () => {
+        await api("DELETE", `/api/milestones/${m.id}`);
+        setData((d) => ({ ...d, milestones: d.milestones.filter((x) => x.id !== m.id) }));
+        return true;
+      }) });
       return true;
     } catch (e) { fail(e); return false; }
-  }), [fail, setData, toast, track]);
-  const updateMilestone: PlanStore["updateMilestone"] = useCallback((m, patch) => track(async () => {
+  }), [fail, setData, track, pushUndo]);
+  const updateMilestoneRef = useRef<PlanStore["updateMilestone"]>(async () => false);
+  const updateMilestone: PlanStore["updateMilestone"] = useCallback((m, patch, opts) => track(async () => {
     try {
       const u = await api<MilestoneDTO>("PATCH", `/api/milestones/${m.id}`, { version: m.version, patch });
       setData((d) => ({ ...d, milestones: d.milestones.map((x) => (x.id === u.id ? u : x)) }));
-      toast.show("success", "נשמר");
+      if (opts?.noUndo) return true;
+      const before = Object.fromEntries(Object.keys(patch).map((k) => [k, (m as Record<string, unknown>)[k]])) as Partial<MsInput>;
+      pushUndo({ label: `אבן הדרך "${m.name}" עודכנה`, run: async () => {
+        const cur = dataRef.current?.milestones.find((x) => x.id === m.id);
+        return cur ? updateMilestoneRef.current(cur, before, { noUndo: true }) : false;
+      } });
       return true;
     } catch (e) { fail(e); return false; }
-  }), [fail, setData, toast, track]);
+  }), [fail, setData, track, pushUndo]);
+  updateMilestoneRef.current = updateMilestone;
   const deleteMilestone: PlanStore["deleteMilestone"] = useCallback((m) => track(async () => {
     setData((d) => ({ ...d, milestones: d.milestones.filter((x) => x.id !== m.id) }));
     try {
@@ -270,18 +300,29 @@ export function useLivePlan(me: Me): PlanStore {
     try {
       const s = await api<SprintDTO>("POST", "/api/sprints", v);
       setData((d) => ({ ...d, sprints: [...d.sprints, s] }));
-      toast.show("success", "הספרינט נוסף");
+      pushUndo({ label: `נוסף ספרינט "${s.name}"`, run: () => track(async () => {
+        await api("DELETE", `/api/sprints/${s.id}`);
+        setData((d) => ({ ...d, sprints: d.sprints.filter((x) => x.id !== s.id) }));
+        return true;
+      }) });
       return true;
     } catch (e) { fail(e); return false; }
-  }), [fail, setData, toast, track]);
-  const updateSprint: PlanStore["updateSprint"] = useCallback((s, patch) => track(async () => {
+  }), [fail, setData, track, pushUndo]);
+  const updateSprintRef = useRef<PlanStore["updateSprint"]>(async () => false);
+  const updateSprint: PlanStore["updateSprint"] = useCallback((s, patch, opts) => track(async () => {
     try {
       const u = await api<SprintDTO>("PATCH", `/api/sprints/${s.id}`, { version: s.version, patch });
       setData((d) => ({ ...d, sprints: d.sprints.map((x) => (x.id === u.id ? u : x)) }));
-      toast.show("success", "נשמר");
+      if (opts?.noUndo) return true;
+      const before = Object.fromEntries(Object.keys(patch).map((k) => [k, (s as Record<string, unknown>)[k]])) as Partial<SprintInput>;
+      pushUndo({ label: `הספרינט "${s.name}" עודכן`, run: async () => {
+        const cur = dataRef.current?.sprints.find((x) => x.id === s.id);
+        return cur ? updateSprintRef.current(cur, before, { noUndo: true }) : false;
+      } });
       return true;
     } catch (e) { fail(e); return false; }
-  }), [fail, setData, toast, track]);
+  }), [fail, setData, track, pushUndo]);
+  updateSprintRef.current = updateSprint;
   const deleteSprint: PlanStore["deleteSprint"] = useCallback((s) => track(async () => {
     setData((d) => ({ ...d, sprints: d.sprints.filter((x) => x.id !== s.id) }));
     try {

@@ -100,6 +100,7 @@ export const preferencesSchema = z.object({
   sidebarCollapsed: z.boolean().optional(),
   textSize: z.enum(["sm", "md", "lg", "xl"]).optional(),
   tableCollapsed: z.array(z.number().int()).max(500).optional(),
+  barFontSize: z.number().int().min(9).max(16).optional(),
 }).strict();
 
 export const adminUserActionSchema = z.discriminatedUnion("action", [
@@ -163,3 +164,20 @@ export const statusCreateSchema = z.object({
 export const statusPatchSchema = statusCreateSchema.partial().extend({ sortOrder: z.number().int().optional(), archived: z.literal(false).optional() });
 export const priorityCreateSchema = z.object({ label, color, isDefault: z.boolean().optional() });
 export const priorityPatchSchema = priorityCreateSchema.partial().extend({ sortOrder: z.number().int().optional(), archived: z.literal(false).optional() });
+
+// --- פניות והגדרות משתמש ---
+export const permissionRequestSchema = z.object({
+  domainIds: z.array(id).max(50).default([]),
+  requestCross: z.boolean().default(false),
+  note: z.string().max(500).default(""),
+});
+export const changePasswordSchema = z.object({
+  current: z.string().min(1, "יש להזין את הסיסמה הנוכחית"),
+  next: z.string().min(8, "הסיסמה חייבת להכיל לפחות 8 תווים").max(200),
+});
+export const handleRequestSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("approve"), domainIds: z.array(id), requestCross: z.boolean() }),
+  z.object({ action: z.literal("reject") }),
+  z.object({ action: z.literal("link") }),
+  z.object({ action: z.literal("dismiss") }),
+]);

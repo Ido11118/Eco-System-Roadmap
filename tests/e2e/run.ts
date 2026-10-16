@@ -1058,6 +1058,186 @@ async function main() {
     await pr.context().close();
   });
 
+  // 47 --------------------------------------------------------------
+  const uF = `f-${RUN}@test.local`;
+  await scenario(47, "הגדרות משתמש: בקשת הרשאות עריכה נוספות → אישור מנהל; שינוי סיסמה", async () => {
+    const F = await ctx();
+    await json(F, "POST", "/api/auth/register", { fullName: "משתמש ו", email: uF, password: PW, domainIds: [AGAM], requestCross: false });
+    await json(admin, "POST", `/api/admin/users/${await userId(uF)}`, { action: "approve", domainIds: [AGAM], canEditCross: false });
+    await login(F, uF, PW);
+    assert((await json(F, "POST", "/api/me/requests", { domainIds: [AGAM], requestCross: false, note: "" })).status === 400, "request for an already-granted domain accepted");
+    const pf = await uiLogin(browser, uF, PW);
+    await pf.click("[data-testid=user-menu]");
+    await pf.locator("[data-floating]").getByText("הגדרות").click();
+    await pf.waitForSelector("[data-testid=settings-perms]");
+    assert((await pf.locator(`[data-domain-perm="${AGAM}"]`).innerText()).includes("עריכה"), "granted domain not shown as editable");
+    const eshName = plan0.domains.find((d) => d.id === ESH)!.name;
+    await pf.getByLabel(`בקשת עריכה ל${eshName}`).check();
+    await pf.click("[data-testid=request-perms]");
+    await pf.waitForSelector("[data-testid=open-request]");
+    assert((await pf.locator(`[data-domain-perm="${ESH}"]`).innerText()).includes("ממתין לאישור"), "requested domain not marked pending");
+    // מנהל המערכת מאשר מתוך מסך הניהול
+    const fid = await userId(uF);
+    const open = (await json<{ id: number; kind: string; userId: number }[]>(admin, "GET", "/api/admin/requests")).body.find((r) => r.userId === fid && r.kind === "permissions");
+    assert(open, "request not visible to admin");
+    assert((await json(A, "GET", "/api/admin/requests")).status === 403, "regular user can list requests");
+    await pAdmin.goto(`${BASE}/admin`);
+    await pAdmin.locator(`[data-testid=request-${open.id}] [data-testid=request-approve]`).click();
+    await pAdmin.waitForSelector(`[data-testid=request-${open.id}]`, { state: "detached" });
+    const me = (await json<{ domainIds: number[] }>(F, "GET", "/api/me")).body;
+    assert(me.domainIds.includes(ESH) && me.domainIds.includes(AGAM), `permissions after approve: ${JSON.stringify(me.domainIds)}`);
+    assert((await json(F, "POST", "/api/rows", { teamId: T_ESH })).status === 200, "approved domain not editable");
+    // שינוי סיסמה
+    await pf.reload();
+    await pf.click("[data-testid=user-menu]");
+    await pf.locator("[data-floating]").getByText("הגדרות").click();
+    await pf.click("[data-testid=settings-tab-password]");
+    await pf.fill("#pw-current", "wrong-password");
+    await pf.fill("#pw-next", "Changed-Pass-789"); await pf.fill("#pw-next2", "Changed-Pass-789");
+    await pf.click("[data-testid=change-password]");
+    await pf.waitForTimeout(800);
+    assert(!(await (await ctx()).post("/api/auth/login", { data: { email: uF, password: "Changed-Pass-789" } })).ok(), "password changed with a wrong current password");
+    await pf.fill("#pw-current", PW);
+    await pf.click("[data-testid=change-password]");
+    await pf.waitForTimeout(800);
+    assert((await (await ctx()).post("/api/auth/login", { data: { email: uF, password: "Changed-Pass-789" } })).ok(), "new password does not work");
+    assert(!(await (await ctx()).post("/api/auth/login", { data: { email: uF, password: PW } })).ok(), "old password still works");
+    assert((await json(pf.context().request, "GET", `${BASE}/api/me`)).status === 200, "current session was logged out");
+    assert((await json(F, "GET", "/api/me")).status === 401, "other session not logged out after password change");
+    await pf.context().close();
+  });
+
+  // 48 --------------------------------------------------------------
+  await scenario(48, "שכחתי סיסמה: פנייה למנהל המערכת → הפקת קישור → איפוס עובד", async () => {
+    const pg = await (await browser.newContext()).newPage();
+    await pg.goto(`${BASE}/forgot`);
+    assert((await pg.locator("body").innerText()).includes("פנה למנהל המערכת"), "explanation text missing");
+    await pg.fill("#email", uF);
+    await pg.locator("form button[type=submit], form button.btn-primary").first().click();
+    await pg.waitForSelector("[data-testid=forgot-done]");
+    await pg.context().close();
+    assert((await json(P, "POST", "/api/auth/forgot", { email: `nobody-${RUN}@test.local` })).status === 200, "unknown email reveals itself");
+    const fid = await userId(uF);
+    const open = (await json<{ id: number; kind: string; userId: number }[]>(admin, "GET", "/api/admin/requests")).body.find((r) => r.userId === fid && r.kind === "password_reset");
+    assert(open, "password reset request not visible to admin");
+    await pAdmin.goto(`${BASE}/admin`);
+    await pAdmin.locator(`[data-testid=request-${open.id}] [data-testid=request-make-link]`).click();
+    const linkEl = pAdmin.locator("[data-testid=reset-link]");
+    await linkEl.waitFor();
+    const token = new URL(await linkEl.inputValue()).searchParams.get("token")!;
+    await pAdmin.keyboard.press("Escape");
+    await pAdmin.waitForSelector(`[data-testid=request-${open.id}]`, { state: "detached" });
+    assert((await json(P, "POST", "/api/auth/reset", { token, password: "Reset-By-Admin-1" })).status === 200, "reset with admin link failed");
+    assert((await (await ctx()).post("/api/auth/login", { data: { email: uF, password: "Reset-By-Admin-1" } })).ok(), "login after reset failed");
+    assert(!(await json<{ id: number }[]>(admin, "GET", "/api/admin/requests")).body.some((r) => r.id === open.id), "request still open after link");
+  });
+
+  // 49 --------------------------------------------------------------
+  await scenario(49, "גאנט: גודל טקסט בקוביות; קליק על אבן דרך מציג סיכום; רק חלונית אחת פתוחה; Ctrl+Z מבטל שינוי סטטוס; תפריטי קליק ימני בהשוואה", async () => {
+    const row = await newRow(admin, T_SYS);
+    const it = (await json<ItemDTO>(admin, "POST", "/api/items", { rowId: row.id, name: `פופאפ-${RUN}`, startWeek: addWeeks(cw, 1), endWeek: addWeeks(cw, 2) })).body;
+    await json(admin, "POST", "/api/milestones", { name: `MS2-${RUN}`, date: addWeeks(cw, 4), teamId: T_SYS });
+    await pAdmin.goto(`${BASE}/plan?view=gantt`);
+    await pAdmin.waitForSelector(`[data-bar="${it.id}"]`);
+    // גודל הטקסט בקוביות
+    await pAdmin.click("[data-testid=display-options]");
+    const v0 = parseInt(await pAdmin.locator("[data-testid=bar-font-value]").innerText());
+    await pAdmin.locator("[data-testid=bar-font]").focus();
+    await pAdmin.keyboard.press("ArrowUp"); await pAdmin.keyboard.press("ArrowUp");
+    await pAdmin.waitForTimeout(300);
+    const fs1 = await pAdmin.locator(`[data-bar="${it.id}"]`).evaluate((el) => getComputedStyle(el).fontSize);
+    assert(fs1 === `${v0 + 2}px`, `bar font ${fs1}, expected ${v0 + 2}px`);
+    await pAdmin.keyboard.press("ArrowDown"); await pAdmin.keyboard.press("ArrowDown");
+    await pAdmin.keyboard.press("Escape");
+    await pAdmin.waitForTimeout(300);
+    // קליק על אבן דרך → סיכום (לא עריכה ישירה), עריכה מתוך הסיכום
+    const ms = pAdmin.locator(`[data-team="${T_SYS}"] [data-marker=milestone]`).last();
+    await ms.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
+    await ms.click();
+    await pAdmin.waitForSelector("[data-testid=marker-summary]");
+    assert(!(await pAdmin.locator("div[role=dialog]").count()), "milestone click opened edit directly");
+    await pAdmin.click("[data-testid=marker-edit]");
+    await pAdmin.waitForSelector("div[role=dialog]");
+    await pAdmin.keyboard.press("Escape");
+    await pAdmin.waitForTimeout(300);
+    // רק חלונית אחת: סיכום תכולה → קליק ימני על אבן דרך → קליק על אבן דרך
+    const bar = pAdmin.locator(`[data-bar="${it.id}"]`);
+    await bar.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
+    await bar.click();
+    await pAdmin.waitForSelector("[data-testid=item-summary]");
+    await ms.click({ button: "right" });
+    await pAdmin.waitForSelector("[data-testid=gantt-menu]");
+    await pAdmin.waitForTimeout(300);
+    assert(await pAdmin.locator("[data-floating]").count() === 1, `after right-click: ${await pAdmin.locator("[data-floating]").count()} popups open`);
+    await pAdmin.keyboard.press("Escape");
+    await bar.click({ button: "right" });
+    await pAdmin.waitForSelector("[data-testid=gantt-menu]");
+    await ms.click();
+    await pAdmin.waitForSelector("[data-testid=marker-summary]");
+    await pAdmin.waitForTimeout(300);
+    assert(await pAdmin.locator("[data-floating]").count() === 1, `after marker click: ${await pAdmin.locator("[data-floating]").count()} popups open`);
+    await pAdmin.keyboard.press("Escape");
+    // Ctrl+Z מבטל שינוי סטטוס
+    await pAdmin.goto(`${BASE}/plan?view=table`);
+    await pAdmin.waitForSelector(`[data-testid=status-${it.id}]`);
+    const st0 = it.status;
+    await pAdmin.selectOption(`[data-testid=status-${it.id}]`, st0 === "BLOCKED" ? "DONE" : "BLOCKED");
+    await pAdmin.waitForTimeout(800);
+    assert((await json<PlanData>(admin, "GET", "/api/plan")).body.items.find((i) => i.id === it.id)?.status !== st0, "status not changed");
+    await pAdmin.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await pAdmin.keyboard.press("ControlOrMeta+z");
+    await pAdmin.waitForTimeout(1000);
+    assert((await json<PlanData>(admin, "GET", "/api/plan")).body.items.find((i) => i.id === it.id)?.status === st0, "Ctrl+Z did not undo status change");
+    // השוואה: קליק ימני על תכולה → הדגשת המצב הנוכחי; על שורה → אפשרויות סינון
+    await pAdmin.goto(`${BASE}/plan?view=compare&base=${snapId}`);
+    const act = pAdmin.locator(`[data-unit="${X1.id}"] [data-actual]`);
+    await act.waitFor({ state: "attached" });
+    await act.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
+    await act.click({ button: "right" });
+    const cm = pAdmin.locator("[data-testid=compare-menu]");
+    await cm.waitFor();
+    assert((await cm.innerText()).includes("הדגשת התכנון"), "plan highlight option missing");
+    await cm.getByText("הדגשת המצב הנוכחי").click();
+    await pAdmin.waitForTimeout(200);
+    assert(((await act.getAttribute("class")) ?? "").includes("locate-flash"), "current state not highlighted");
+    await pAdmin.locator("[data-cross=INFLUENCE] > div").first().click({ button: "right" });
+    await cm.waitFor();
+    await cm.getByText(/הסתרת השורה/).click();
+    await pAdmin.waitForTimeout(300);
+    assert(!(await pAdmin.locator("[data-cross=INFLUENCE]").count()), "compare: influence row not hidden");
+    await pAdmin.getByRole("button", { name: "ניקוי מסננים" }).click();
+    await pAdmin.waitForSelector("[data-cross=INFLUENCE]");
+  });
+
+  // 50 --------------------------------------------------------------
+  await scenario(50, "מנהל המערכת מוחק לצמיתות תכולות שנמחקו (בחירה מרובה); משתמש רגיל לא יכול", async () => {
+    const row = await newRow(admin, T_SYS);
+    const mk = async (n: string, w: number) => (await json<ItemDTO>(admin, "POST", "/api/items", { rowId: row.id, name: `${n}-${RUN}`, startWeek: addWeeks(cw, w), endWeek: addWeeks(cw, w) })).body;
+    const d1 = await mk("לצמיתות1", 24), d2 = await mk("לצמיתות2", 25), live = await mk("חי", 26);
+    await json(admin, "DELETE", `/api/items/${d1.id}`); await json(admin, "DELETE", `/api/items/${d2.id}`);
+    assert((await json(A, "DELETE", "/api/items/deleted", { ids: [d1.id] })).status === 403, "regular user can purge");
+    assert((await json<{ purged: number }>(admin, "DELETE", "/api/items/deleted", { ids: [live.id] })).body.purged === 0, "purge touched a live item");
+    await pAdmin.goto(`${BASE}/plan?view=table`); await pAdmin.waitForSelector("[data-testid=table-view]");
+    await pAdmin.click("[data-testid=deleted-items]");
+    await pAdmin.waitForSelector(`[data-testid=purge-check-${d1.id}]`);
+    await pAdmin.check(`[data-testid=purge-check-${d1.id}]`); await pAdmin.check(`[data-testid=purge-check-${d2.id}]`);
+    assert((await pAdmin.innerText("[data-testid=purge-selected]")).includes("(2)"), "selection count not shown");
+    await pAdmin.click("[data-testid=purge-selected]");
+    await pAdmin.locator("div[role=dialog]").last().getByRole("button", { name: "מחיקה לצמיתות", exact: true }).click();
+    await pAdmin.waitForSelector(`[data-deleted="${d1.id}"]`, { state: "detached" });
+    const del = (await json<{ id: number }[]>(admin, "GET", "/api/items/deleted")).body;
+    assert(!del.some((i) => i.id === d1.id || i.id === d2.id), "purged items still listed");
+    assert((await json(admin, "POST", `/api/items/${d1.id}/restore`)).status === 404, "purged item can be restored");
+    assert((await json<PlanData>(admin, "GET", "/api/plan")).body.items.some((i) => i.id === live.id), "live item removed");
+    await pAdmin.keyboard.press("Escape");
+    // משתמש רגיל לא רואה תיבות מחיקה לצמיתות
+    await pa.goto(`${BASE}/plan?view=table`); await pa.waitForSelector("[data-testid=table-view]");
+    await pa.click("[data-testid=deleted-items]");
+    await pa.waitForSelector("[data-testid=deleted-list]");
+    assert(!(await pa.locator("[data-testid=purge-selected]").count()), "regular user sees purge button");
+    await pa.keyboard.press("Escape");
+  });
+
   await browser.close();
   console.log("\n────────────────────────────────────────");
   const failed = results.filter((r) => !r.ok);

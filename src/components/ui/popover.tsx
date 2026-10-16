@@ -48,7 +48,7 @@ export function Floating({
   }, [open, onClose, anchor]);
   if (!open || typeof document === "undefined") return null;
   return createPortal(
-    <div ref={ref} className={clsx("fixed z-[90] anim-in rounded-lg border border-ink-200 bg-white shadow-pop", className)}
+    <div ref={ref} data-floating className={clsx("fixed z-[90] anim-in rounded-lg border border-ink-200 bg-white shadow-pop", className)}
       style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}>
       {children}
     </div>,

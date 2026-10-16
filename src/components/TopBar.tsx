@@ -1,12 +1,14 @@
 "use client";
 import { useRef, useState } from "react";
-import { ChevronDown, LogOut, ShieldCheck } from "lucide-react";
+import { ChevronDown, LogOut, ShieldCheck, Settings } from "lucide-react";
+import { UserSettingsDialog } from "./UserSettings";
 import type { Me } from "@/lib/types";
 import { api } from "@/lib/api";
 import { Floating, MenuItem } from "@/components/ui/popover";
 
 export function TopBar({ me, children }: { me: Me; children?: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [settings, setSettings] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
   const initials = me.fullName.split(/\s+/).map((p) => p[0]).slice(0, 2).join("");
   return (
@@ -28,9 +30,11 @@ export function TopBar({ me, children }: { me: Me; children?: React.ReactNode })
             </div>
           </div>
           <div className="my-1 border-t border-ink-100" />
+          <MenuItem icon={<Settings size={14} />} onClick={() => { setOpen(false); setSettings(true); }}>הגדרות</MenuItem>
           <MenuItem icon={<LogOut size={14} />} onClick={async () => { await api("POST", "/api/auth/logout"); window.location.href = "/login"; }}>התנתקות</MenuItem>
         </div>
       </Floating>
+      {settings && <UserSettingsDialog me={me} onClose={() => setSettings(false)} />}
     </header>
   );
 }

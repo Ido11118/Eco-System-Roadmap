@@ -66,6 +66,7 @@ export type UserPreferences = {
   sidebarCollapsed?: boolean;
   textSize?: TextSize; // גודל התצוגה האישי (גודל טקסט וכל הממשק)
   tableCollapsed?: number[]; // צוותים שמקטע שלהם מכווץ בטבלת התכולות
+  barFontSize?: number; // גודל הטקסט בתוך קוביות הגאנט (פיקסלים)
 };
 export type TextSize = "sm" | "md" | "lg" | "xl";
 

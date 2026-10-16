@@ -7,7 +7,7 @@ import { ArchiveRestore, RotateCcw } from "lucide-react";
 import type { ItemDTO } from "@/lib/types";
 import { api } from "@/lib/api";
 import { weekNumber, weekYear } from "@/lib/weeks";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, useConfirm } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { useCatalog } from "@/components/CatalogProvider";
 import { PLAN_KEY } from "./store";
@@ -17,19 +17,21 @@ import type { PlanData } from "@/lib/types";
 
 type Deleted = ItemDTO & { deletedAt: string; deletedBy: string; rowKind: string; canRestore: boolean };
 
-export function DeletedItemsButton({ data }: { data: PlanData }) {
+export function DeletedItemsButton({ data, isSuper }: { data: PlanData; isSuper: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <button className="btn-ghost btn-sm" onClick={() => setOpen(true)} data-testid="deleted-items" title="שחזור תכולות שנמחקו (עם אותו ID)">
         <ArchiveRestore size={14} />תכולות שנמחקו
       </button>
-      {open && <DeletedItemsDialog data={data} onClose={() => setOpen(false)} />}
+      {open && <DeletedItemsDialog data={data} isSuper={isSuper} onClose={() => setOpen(false)} />}
     </>
   );
 }
 
-function DeletedItemsDialog({ data, onClose }: { data: PlanData; onClose: () => void }) {
+function DeletedItemsDialog({ data, isSuper, onClose }: { data: PlanData; isSuper: boolean; onClose: () => void }) {
+  const confirm = useConfirm();
+  const [sel, setSel] = useState<Set<number>>(new Set());
   const qc = useQueryClient();
   const toast = useToast();
   const cat = useCatalog();
@@ -46,14 +48,41 @@ function DeletedItemsDialog({ data, onClose }: { data: PlanData; onClose: () => 
     } catch (e) { toast.show("error", (e as Error).message); }
     setBusy(null);
   };
+  const purge = async () => {
+    const ids = [...sel];
+    const ok = await confirm({
+      title: `מחיקה לצמיתות (${ids.length})`, danger: true, confirm: "מחיקה לצמיתות",
+      text: <>התכולות יימחקו <b>לצמיתות</b> ולא ניתן יהיה לשחזר אותן.<span className="mt-1.5 block text-[12px] text-ink-500">תמונות מצב שכבר נשמרו לא מושפעות, ויומן הפעולות נשמר.</span></>,
+    });
+    if (!ok) return;
+    try {
+      const r = await api<{ purged: number }>("DELETE", "/api/items/deleted", { ids });
+      toast.show("success", `נמחקו לצמיתות ${r.purged} תכולות`);
+      setSel(new Set());
+      await qc.invalidateQueries({ queryKey: ["deleted-items"] });
+    } catch (e) { toast.show("error", (e as Error).message); }
+  };
+  const allSel = items.length > 0 && items.every((i) => sel.has(i.id));
   return (
     <Dialog open onClose={onClose} width={640} title={<span className="flex items-center gap-2"><ArchiveRestore size={16} className="text-brand-600" />תכולות שנמחקו</span>}
-      footer={<button className="btn-secondary" onClick={onClose}>סגירה</button>}>
+      footer={<>
+        <button className="btn-secondary" onClick={onClose}>סגירה</button>
+        {isSuper && <button className="btn-danger mr-auto" disabled={!sel.size} onClick={() => void purge()} data-testid="purge-selected">מחיקה לצמיתות{sel.size ? ` (${sel.size})` : ""}</button>}
+      </>}>
       <p className="mb-2 text-[12.5px] text-ink-500">
         שחזור מחזיר את התכולה <b>עם אותו ID</b>, כך שבתכנון מול ביצוע היא ממשיכה להיות מזוהה. אם נמחקה בטעות — עדיף לשחזר אותה מאשר ליצור מחדש
         (יצירה מחדש מקבלת ID חדש ותופיע כ&quot;נמחקה&quot; + &quot;נוספה&quot;). מוצגות מחיקות מ-{DELETED_RETENTION_DAYS} הימים האחרונים, בתחומים שאתה מורשה לערוך.
       </p>
-      <input className="input mb-2 h-8" placeholder="חיפוש לפי שם או ID…" value={q} onChange={(e) => setQ(e.target.value)} data-autofocus />
+      <div className="mb-2 flex items-center gap-2">
+        <input className="input h-8 flex-1" placeholder="חיפוש לפי שם או ID…" value={q} onChange={(e) => setQ(e.target.value)} data-autofocus />
+        {isSuper && items.length > 0 && (
+          <label className="flex shrink-0 items-center gap-1.5 text-[12px] text-ink-500">
+            <input type="checkbox" className="h-3.5 w-3.5 accent-red-600" checked={allSel}
+              onChange={(e) => setSel(e.target.checked ? new Set(items.map((i) => i.id)) : new Set())} data-testid="purge-select-all" />
+            בחירת הכל
+          </label>
+        )}
+      </div>
       {list.isLoading && <div className="py-6 text-center text-ink-400">טוען…</div>}
       {list.data && items.length === 0 && <div className="py-6 text-center text-ink-400">אין תכולות שנמחקו{q ? " שמתאימות לחיפוש" : ""}.</div>}
       <ul className="divide-y divide-ink-100" data-testid="deleted-list">
@@ -62,6 +91,8 @@ function DeletedItemsDialog({ data, onClose }: { data: PlanData; onClose: () => 
           const st = cat.status(it.status);
           return (
             <li key={it.id} className="flex items-center gap-3 py-2" data-deleted={it.id}>
+              {isSuper && <input type="checkbox" className="h-3.5 w-3.5 shrink-0 accent-red-600" checked={sel.has(it.id)} aria-label={`בחירה למחיקה לצמיתות: ${it.name}`}
+                onChange={(e) => setSel((s) => { const n = new Set(s); if (e.target.checked) n.add(it.id); else n.delete(it.id); return n; })} data-testid={`purge-check-${it.id}`} />}
               <span className="h-3 w-3 shrink-0 rounded-sm border" style={{ background: st.bg, borderColor: st.border }} title={st.label} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px] font-medium text-ink-900">{it.name} <span className="font-mono text-[11px] font-normal text-ink-400">ID {it.id}</span></div>

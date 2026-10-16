@@ -3,9 +3,13 @@
 // כל ID = יחידת תצוגה אחת. תכולה שתאריכיה לא השתנו מוצגת כרגיל; אם השתנו — המיקום המתוכנן מוצג במקווקו באותה שורה, עם קו מחבר.
 import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Target, Crosshair, ExternalLink } from "lucide-react";
+import { Floating, MenuItem } from "@/components/ui/popover";
+import { useToast } from "@/components/ui/toast";
+import { LabelMenu } from "./GanttView";
 import type { PlanData, ViewConfig } from "@/lib/types";
 import { useCatalog } from "@/components/CatalogProvider";
+import { useBarFontSize } from "@/components/plan/prefs";
 import {
   buildCompareLayout, summarize, datesChanged, COMPARE_FILTERS, TAG_LABELS, type CompareUnit,
 } from "@/lib/compare";
@@ -20,11 +24,14 @@ export type CompareHandle = { goToday: () => void };
 
 export const CompareView = memo(forwardRef<CompareHandle, {
   current: PlanData; baseline: PlanData; view: ViewConfig; filterKey: string; onFilterKey: (k: string) => void;
-  planLabel: string; actualLabel: string;
-}>(function CompareView({ current, baseline, view, filterKey, onFilterKey, planLabel, actualLabel }, ref) {
+  planLabel: string; actualLabel: string; setView?: (v: ViewConfig) => void;
+}>(function CompareView({ current, baseline, view, filterKey, onFilterKey, planLabel, actualLabel, setView }, ref) {
+  const [menu, setMenu] = useState<{ x: number; y: number; unit?: CompareUnit; label?: { domainId: number; teamId: number | null } } | null>(null);
+  const toast = useToast();
   const tip = useTooltip();
   const ui = useWorkspaceUI();
   const cat = useCatalog();
+  const [barFont] = useBarFontSize(ui.me.preferences);
   const gridRef = useRef<GanttGridHandle>(null);
   const { weekW, rowH, crossLaneH } = geometry(view.density, true);
   const merged = useMemo<PlanData>(() => ({ ...current, items: [...current.items, ...baseline.items] }), [current, baseline]);
@@ -129,6 +136,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
         onMouseEnter: (e: React.MouseEvent) => hot(e, true),
         onMouseLeave: (e: React.MouseEvent) => { tip.hide(); hot(e, false); },
         onClick: () => { if (u.actual) ui.openItem(u.id); },
+        onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); tip.hide(); setMenu({ x: e.clientX, y: e.clientY, unit: u }); },
       };
       // קו מחבר בין המצב המתוכנן למצב בביצוע (רק כשיש רווח ביניהם)
       let link: { right: number; width: number; dir: "later" | "earlier" } | null = null;
@@ -155,7 +163,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
           {ab && m && (
             <div {...events} data-actual={u.id}
               className="gantt-bar absolute z-[11] flex cursor-pointer items-center gap-1 overflow-hidden rounded-[5px] border text-[12px] font-medium"
-              style={{ right: ab.right + (changed ? 2 : 0), width: ab.width - (changed ? 4 : 0), top: changed ? 6 : 3, height: changed ? h - 12 : h - 6, background: m.bg, color: m.fg, borderColor: m.border }}>
+              style={{ right: ab.right + (changed ? 2 : 0), width: ab.width - (changed ? 4 : 0), top: changed ? 6 : 3, height: changed ? h - 12 : h - 6, background: m.bg, color: m.fg, borderColor: m.border, fontSize: barFont }}>
               {added && <span className="mr-1 shrink-0 rounded bg-brand-600 px-1 text-[9.5px] font-bold text-white">חדש</span>}
               <span className="truncate px-1">{u.name}</span>
             </div>
@@ -173,11 +181,51 @@ export const CompareView = memo(forwardRef<CompareHandle, {
           teams={structure.teams.filter((t) => teamsVisible.has(t.id))}
           teamLanes={teamLanes} crossGroups={crossGroups} todayIndex={todayIndex}
           renderLane={(lane) => renderLane(lane)} teamEditable={() => false} readOnlyHints={false}
+          onLabelContextMenu={setView ? (e, domainId, teamId) => setMenu({ x: e.clientX, y: e.clientY, label: { domainId, teamId } }) : undefined}
           emptyText="אין תכולות להצגה לפי הסינון הנוכחי" />
       </div>
+      <Floating open={!!menu} point={menu ?? undefined} onClose={() => setMenu(null)}>
+        {menu && (
+          <div className="w-[240px] p-1" onClick={() => setMenu(null)} data-testid="compare-menu">
+            {menu.label && setView ? <LabelMenu label={menu.label} data={{ ...current, ...structure }} view={view} setView={setView} toast={toast} />
+              : menu.unit ? <UnitMenu u={menu.unit} onOpen={(id) => ui.openItem(id)} /> : null}
+          </div>
+        )}
+      </Floating>
     </div>
   );
 }));
+
+/** הדגשת אלמנט בגאנט ההשוואה: גלילה אליו והבהוב */
+function flash(sel: string) {
+  const el = document.querySelector<HTMLElement>(sel);
+  if (!el) return;
+  el.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+  el.classList.remove("locate-flash"); void el.offsetWidth; el.classList.add("locate-flash");
+  setTimeout(() => el.classList.remove("locate-flash"), 2400);
+}
+
+/** קליק ימני על תכולה בהשוואה: הדגשת המקור (התכנון) / המצב הנוכחי / פרטים */
+function UnitMenu({ u, onOpen }: { u: CompareUnit; onOpen: (id: number) => void }) {
+  const hasPlanBox = !!u.plan && (datesChanged(u) || !u.actual); // תכולה שלא זזה — התכנון והביצוע באותו מקום
+  return (
+    <>
+      <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-ink-500">{u.name} · ID {u.id}</div>
+      {u.plan && (
+        <MenuItem icon={<Target size={14} />} onClick={() => flash(hasPlanBox ? `[data-plan="${u.id}"]` : `[data-actual="${u.id}"]`)}>
+          {hasPlanBox ? "הדגשת התכנון (מקור)" : "הדגשת התכנון (לא השתנה)"}
+        </MenuItem>
+      )}
+      {u.actual && <MenuItem icon={<Crosshair size={14} />} onClick={() => flash(`[data-actual="${u.id}"]`)}>הדגשת המצב הנוכחי</MenuItem>}
+      {!u.actual && <div className="px-2.5 py-1 text-[12px] text-ink-400">התכולה נמחקה — אין מצב נוכחי</div>}
+      {!u.plan && <div className="px-2.5 py-1 text-[12px] text-ink-400">נוספה אחרי התכנון — אין מקור</div>}
+      {u.actual && <>
+        <div className="my-1 border-t border-ink-100" />
+        <MenuItem icon={<ExternalLink size={14} />} onClick={() => onOpen(u.id)}>פרטי התכולה</MenuItem>
+      </>}
+    </>
+  );
+}
 
 function fmtDelta(d: number) {
   if (d === 0) return "ללא שינוי";

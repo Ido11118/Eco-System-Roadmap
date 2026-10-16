@@ -200,7 +200,7 @@ export function PlanApp({ me }: { me: Me }) {
             {mode !== "compare" && !snapId && !store.data?.teams.some((t) => store.canEditTeam(t.id)) && !store.canEditCross() && store.data && (
               <span className="flex items-center gap-1 text-[12px] text-ink-400" title="אין לך הרשאות עריכה"><Lock size={12} />צפייה בלבד</span>
             )}
-            {!snapId && mode !== "compare" && live.data && (me.role === "SUPER" || me.domainIds.length > 0 || me.canEditCross) && <DeletedItemsButton data={live.data} />}
+            {!snapId && mode !== "compare" && live.data && (me.role === "SUPER" || me.domainIds.length > 0 || me.canEditCross) && <DeletedItemsButton data={live.data} isSuper={me.role === "SUPER"} />}
             {!snapId && mode !== "compare" && <SaveSnapshotButton isSuper={me.role === "SUPER"} />}
           </div>
         </TopBar>
@@ -245,7 +245,7 @@ export function PlanApp({ me }: { me: Me }) {
               </Center>
             ) : cmpError ? <Center><span className="text-red-600">{cmpError}</span></Center>
               : cmp?.plan.data && cmp.actual.data ? (
-                <CompareView ref={compareRef} current={cmp.actual.data} baseline={cmp.plan.data} view={view}
+                <CompareView ref={compareRef} current={cmp.actual.data} baseline={cmp.plan.data} view={view} setView={setView}
                   filterKey={compareFilter} onFilterKey={setCompareFilter}
                   planLabel={`${cmp.plan.label} · ${fmtDate(cmp.plan.date)}`} actualLabel={`${cmp.actual.label} · ${fmtDate(cmp.actual.date)}`} />
               ) : <Center><Loader2 className="animate-spin text-ink-400" /></Center>

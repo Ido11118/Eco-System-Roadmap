@@ -37,6 +37,18 @@ export function zoomOf(size: TextSize | undefined) {
 export function uiZoom(): number {
   return typeof window === "undefined" ? 1 : zoomOf(cache?.textSize);
 }
+/** גודל הטקסט בתוך קוביות הגאנט — נשמר אישית ומתעדכן מיד בכל המסכים */
+export const BAR_FONT = { min: 9, max: 16, def: 12 };
+export function useBarFontSize(initial: UserPreferences): [number, (n: number) => void] {
+  const [v, setV] = useState<number>(() => currentPrefs(initial).barFontSize ?? BAR_FONT.def);
+  useEffect(() => {
+    const l = () => setV(cache?.barFontSize ?? BAR_FONT.def);
+    listeners.add(l);
+    return () => { listeners.delete(l); };
+  }, []);
+  return [v, (n) => savePrefs({ barFontSize: n })];
+}
+
 export function useTextSize(initial: UserPreferences): [TextSize, (t: TextSize) => void] {
   const [v, setV] = useState<TextSize>(() => currentPrefs(initial).textSize ?? "md");
   useEffect(() => {

@@ -32,6 +32,12 @@ export async function createSession(userId: number) {
   });
 }
 
+/** מזהה הסשן הנוכחי (לשמירתו בזמן ניתוק שאר החיבורים) */
+export async function currentSessionId(): Promise<string | null> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  return token ? sha256(token) : null;
+}
+
 export async function destroySession() {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;

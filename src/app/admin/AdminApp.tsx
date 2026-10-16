@@ -26,6 +26,8 @@ export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name:
   const q = useQuery({ queryKey: ["admin-users"], queryFn: () => api<AdminUser[]>("GET", "/api/admin/users"), refetchInterval: 15000 });
   const users = q.data ?? [];
   const pending = users.filter((u) => u.status === "PENDING");
+  const reqs = useQuery({ queryKey: ["admin-requests"], queryFn: () => api<OpenRequest[]>("GET", "/api/admin/requests"), refetchInterval: 15000 });
+  const waiting = pending.length + (reqs.data?.length ?? 0);
   return (
     <AppShell me={me} active="admin">
       <TopBar me={me}><span className="text-[14px] font-semibold text-ink-900">ניהול מערכת</span></TopBar>
@@ -34,14 +36,14 @@ export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name:
           <h1 className="text-[20px] font-bold">ניהול מערכת</h1>
           <p className="mt-1 text-ink-500">משתמשים והרשאות: אישור משתמש מקנה צפייה בכל תוכנית העבודה, והרשאות עריכה ניתנות לפי תחום ובנפרד למידע הרוחבי. בלשונית &quot;הגדרות&quot; — סטטוסים ותיעדוף.</p>
           <div className="mt-5 flex gap-1 border-b border-ink-200">
-            {([["users", pending.length ? `משתמשים · ${pending.length} ממתינים` : "משתמשים"], ["settings", "הגדרות"], ["audit", "יומן פעולות"]] as const).map(([k, l]) => (
+            {([["users", waiting ? `משתמשים · ${waiting} ממתינים` : "משתמשים"], ["settings", "הגדרות"], ["audit", "יומן פעולות"]] as const).map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} data-testid={`admin-tab-${k}`}
                 className={clsx("-mb-px border-b-2 px-3 py-2 text-[13px] font-medium", tab === k ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500 hover:text-ink-900")}>{l}</button>
             ))}
           </div>
           <div className="mt-4 space-y-3">
             {tab === "settings" ? <CatalogSettings /> : tab === "audit" ? <AuditLog /> : (
-              <UsersPage users={users} pending={pending} domains={domains} loading={q.isLoading} />
+              <UsersPage users={users} pending={pending} requests={reqs.data ?? []} domains={domains} loading={q.isLoading} />
             )}
           </div>
         </div>
@@ -53,8 +55,8 @@ export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name:
 // סינון לפי הרשאה: מזהה תחום, או אחד הערכים המיוחדים
 const F_CROSS = -1, F_VIEW_ONLY = -2;
 
-function UsersPage({ users, pending, domains, loading }: {
-  users: AdminUser[]; pending: AdminUser[]; domains: { id: number; name: string }[]; loading: boolean;
+function UsersPage({ users, pending, requests, domains, loading }: {
+  users: AdminUser[]; pending: AdminUser[]; requests: OpenRequest[]; domains: { id: number; name: string }[]; loading: boolean;
 }) {
   const [q, setQ] = useState("");
   const [perm, setPerm] = useState<number[]>([]);
@@ -82,11 +84,14 @@ function UsersPage({ users, pending, domains, loading }: {
       <section className="space-y-3" data-testid="pending-section">
         <h2 className="flex items-center gap-2 text-[15px] font-semibold">
           בקשות ממתינות
-          {pending.length > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11.5px] font-medium text-amber-800">{pending.length}</span>}
+          {pending.length + requests.length > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11.5px] font-medium text-amber-800">{pending.length + requests.length}</span>}
         </h2>
-        {pending.length === 0
+        {pending.length + requests.length === 0
           ? <div className="card px-4 py-3 text-[13px] text-ink-500">אין בקשות ממתינות.</div>
-          : pending.map((u) => <UserCard key={u.id} u={u} domains={domains} />)}
+          : <>
+            {pending.map((u) => <UserCard key={u.id} u={u} domains={domains} />)}
+            {requests.map((r) => <RequestCard key={r.id} r={r} domains={domains} />)}
+          </>}
       </section>
 
       <section className="space-y-3" data-testid="users-section">
@@ -104,6 +109,85 @@ function UsersPage({ users, pending, domains, loading }: {
           ? <div className="card p-8 text-center text-ink-500">{others.length ? "אין משתמשים שתואמים לסינון." : "אין משתמשים."}</div>
           : filtered.map((u) => <UserCard key={u.id} u={u} domains={domains} />)}
       </section>
+    </div>
+  );
+}
+
+type OpenRequest = {
+  id: number; kind: "permissions" | "password_reset"; userId: number; domainIds: number[]; requestCross: boolean; note: string; createdAt: string;
+  user: { fullName: string; email: string; userStatus: string; canEditCross: boolean; domainIds: number[] };
+};
+
+/** פנייה ממשתמש קיים: בקשת הרשאות נוספות, או בקשת קישור לאיפוס סיסמה */
+function RequestCard({ r, domains }: { r: OpenRequest; domains: { id: number; name: string }[] }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [sel, setSel] = useState<number[]>(r.domainIds);
+  const [cross, setCross] = useState(r.requestCross);
+  const [link, setLink] = useState<{ link: string; email: string; fullName: string } | null>(null);
+  const name = (id: number) => domains.find((d) => d.id === id)?.name ?? `#${id}`;
+  const act = async (body: Record<string, unknown>, msg?: string) => {
+    try {
+      const res = await api<{ link?: string; email?: string; fullName?: string }>("POST", `/api/admin/requests/${r.id}`, body);
+      // קישור איפוס: מרעננים את הרשימה רק כשסוגרים את החלון — אחרת הפנייה (שנסגרה) נעלמת יחד עם החלון שמציג את הקישור
+      if (res.link) { setLink({ link: res.link, email: res.email!, fullName: res.fullName! }); return; }
+      if (msg) toast.show("success", msg);
+      await refresh();
+    } catch (e) { toast.show("error", (e as Error).message); }
+  };
+  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ["admin-requests"] }), qc.invalidateQueries({ queryKey: ["admin-users"] }), qc.invalidateQueries({ queryKey: ["pending-count"] })]);
+  const closeLink = () => { setLink(null); void refresh(); };
+  const isReset = r.kind === "password_reset";
+  return (
+    <div className="card p-4" data-testid={`request-${r.id}`} data-request-kind={r.kind}>
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="min-w-[220px] flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[14px] font-semibold">{r.user.fullName}</span>
+            <span className={clsx("rounded-full px-2 py-0.5 text-[11px] font-medium", isReset ? "bg-violet-100 text-violet-800" : "bg-sky-100 text-sky-800")}>
+              {isReset ? "בקשת איפוס סיסמה" : "בקשת הרשאות עריכה"}
+            </span>
+          </div>
+          <div className="text-[12.5px] text-ink-500" dir="ltr" style={{ textAlign: "right" }}>{r.user.email}</div>
+          <div className="mt-1 text-[11.5px] text-ink-400">נשלחה {fmtTs(r.createdAt)}</div>
+          {!isReset && <div className="mt-1.5 text-[12px] text-ink-500">הרשאות קיימות: {r.user.domainIds.length ? r.user.domainIds.map(name).join(", ") : "צפייה בלבד"}{r.user.canEditCross ? " + רוחבי" : ""}</div>}
+          {r.note && <div className="mt-1 rounded bg-ink-50 px-2 py-1 text-[12px] text-ink-700">&quot;{r.note}&quot;</div>}
+        </div>
+        {!isReset && (
+          <div className="flex-[2]">
+            <div className="label">מבוקש (ניתן לאשר חלקית)</div>
+            <div className="flex flex-wrap gap-1.5">
+              {r.domainIds.map((d) => (
+                <button key={d} type="button" onClick={() => setSel((s) => (s.includes(d) ? s.filter((x) => x !== d) : [...s, d]))}
+                  className={clsx("chip h-7 cursor-pointer", sel.includes(d) && "border-brand-500 bg-brand-50 text-brand-700")}>
+                  {sel.includes(d) && <Check size={12} />}{name(d)}
+                </button>
+              ))}
+              {r.requestCross && (
+                <button type="button" onClick={() => setCross((c) => !c)} className={clsx("chip h-7 cursor-pointer", cross && "border-violet-500 bg-violet-50 text-violet-700")}>
+                  {cross && <Check size={12} />}רוחבי
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink-100 pt-3">
+        {isReset ? <>
+          <button className="btn-primary btn-sm" onClick={() => void act({ action: "link" })} data-testid="request-make-link"><KeyRound size={13} />הפקת קישור לאיפוס</button>
+          <button className="btn-ghost btn-sm" onClick={() => void act({ action: "dismiss" }, "הבקשה נסגרה")}>סגירה ללא פעולה</button>
+        </> : <>
+          <button className="btn-primary btn-sm" disabled={!sel.length && !cross} onClick={() => void act({ action: "approve", domainIds: sel, requestCross: cross }, "ההרשאות נוספו")} data-testid="request-approve"><Check size={13} />אישור</button>
+          <button className="btn-ghost btn-sm text-red-600 hover:bg-red-50" onClick={() => void act({ action: "reject" }, "הבקשה נדחתה")} data-testid="request-reject"><X size={13} />דחייה</button>
+        </>}
+      </div>
+      <Dialog open={!!link} onClose={closeLink} title="קישור לאיפוס סיסמה" footer={<button className="btn-secondary" onClick={closeLink}>סגירה</button>}>
+        <p className="mb-2 text-[12.5px] text-ink-500">שלח את הקישור אל <b>{link?.fullName}</b> (<span dir="ltr">{link?.email}</span>) — למשל בוואטסאפ או במייל. הקישור בתוקף לשעה ולשימוש אחד.</p>
+        <div className="flex gap-1">
+          <input className="input font-mono text-[11px]" dir="ltr" readOnly value={link?.link ?? ""} onFocus={(e) => e.target.select()} data-testid="reset-link" />
+          <button className="btn-secondary" onClick={() => { void navigator.clipboard?.writeText(link?.link ?? ""); toast.show("success", "הועתק"); }}><Copy size={13} /></button>
+        </div>
+      </Dialog>
     </div>
   );
 }

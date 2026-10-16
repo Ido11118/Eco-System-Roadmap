@@ -2,7 +2,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
-import { Check, Eye, EyeOff, CircleCheck } from "lucide-react";
+import { Check, Eye } from "lucide-react";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { api, ApiErr } from "@/lib/api";
 import { FormError } from "@/components/AuthShell";
 
@@ -75,23 +76,5 @@ export function RegisterForm({ domains }: { domains: { id: number; name: string 
         כבר רשום? <Link href="/login" className="font-medium text-brand-600 hover:underline">להתחברות</Link>
       </p>
     </form>
-  );
-}
-
-/** שדה סיסמה עם "עין" להצגה/הסתרה, וסימון V כשהאימות תואם */
-function PasswordInput({ id, value, onChange, show, onToggle, status }: {
-  id: string; value: string; onChange: (v: string) => void; show: boolean; onToggle: () => void; status?: "match" | "mismatch";
-}) {
-  return (
-    <div className="relative">
-      <input id={id} className={clsx("input h-10 pl-16", status === "match" && "border-green-500", status === "mismatch" && "border-red-400")}
-        dir="ltr" type={show ? "text" : "password"} minLength={8} required autoComplete="new-password" value={value} onChange={(e) => onChange(e.target.value)} />
-      <div className="absolute inset-y-0 left-1.5 flex items-center gap-1">
-        {status === "match" && <CircleCheck size={16} className="text-green-600" aria-label="הסיסמאות תואמות" data-testid={`${id}-match`} />}
-        <button type="button" className="icon-btn h-7 w-7" onClick={onToggle} aria-label={show ? "הסתרת הסיסמה" : "הצגת הסיסמה"} title={show ? "הסתרת הסיסמה" : "הצגת הסיסמה"} data-testid={`${id}-eye`}>
-          {show ? <EyeOff size={15} /> : <Eye size={15} />}
-        </button>
-      </div>
-    </div>
   );
 }

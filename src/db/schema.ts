@@ -240,3 +240,22 @@ export const appSettings = pgTable("app_settings", {
   value: text("value").notNull(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });
+
+// פניות משתמשים למנהל המערכת: בקשת הרשאות עריכה נוספות / בקשת קישור לאיפוס סיסמה
+export const userRequests = pgTable("user_requests", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  kind: varchar("kind", { length: 20 }).notNull(), // permissions | password_reset
+  domainIds: integer("domain_ids").array().notNull().default(sql`'{}'::integer[]`),
+  requestCross: boolean("request_cross").notNull().default(false),
+  note: text("note").notNull().default(""),
+  status: varchar("status", { length: 12 }).notNull().default("open"), // open | approved | rejected | done
+  createdAt: ts("created_at").notNull().defaultNow(),
+  handledAt: ts("handled_at"),
+  handledById: integer("handled_by_id"),
+}, (t) => [
+  // פנייה פתוחה אחת לכל משתמש לכל סוג — פנייה חוזרת מעדכנת את הקיימת
+  uniqueIndex("user_requests_one_open").on(t.userId, t.kind).where(sql`${t.status} = 'open'`),
+  check("user_requests_kind_chk", sql`${t.kind} in ('permissions','password_reset')`),
+  check("user_requests_status_chk", sql`${t.status} in ('open','approved','rejected','done')`),
+]);
