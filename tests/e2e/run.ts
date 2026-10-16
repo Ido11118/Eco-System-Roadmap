@@ -413,6 +413,8 @@ async function main() {
     await pa.waitForTimeout(300);
     const after = (await json<PlanData>(B, "GET", "/api/plan")).body.items.length;
     assert(before === after, "filtering changed data");
+    await pa.fill("[data-testid=search]", ""); // הסינון נשמר אישית — מנקים כדי לא להשפיע על התרחישים הבאים
+    await pa.waitForTimeout(1000);
     await json(A, "DELETE", `/api/views/${mine.id}`);
   });
 
@@ -573,9 +575,9 @@ async function main() {
     const mine = plan.items.filter((i) => i.teamId === T_AZ1 && i.startWeek >= cw).slice(0, 2);
     assert(mine.length === 2, "need two items");
     await pa.waitForSelector(`[data-bar="${mine[0].id}"]`);
-    await pa.locator(`[data-bar="${mine[0].id}"]`).click();
+    await pa.locator(`[data-bar="${mine[0].id}"]`).dblclick();
     await pa.fill("#p-notes", `הערה ל-${mine[0].id}`);
-    await pa.locator(`[data-bar="${mine[1].id}"]`).click();
+    await pa.locator(`[data-bar="${mine[1].id}"]`).dblclick();
     await pa.waitForTimeout(1200);
     const after = (await json<PlanData>(A, "GET", "/api/plan")).body;
     assert(after.items.find((i) => i.id === mine[0].id)!.notes === `הערה ל-${mine[0].id}`, "note for first item lost");
@@ -618,6 +620,63 @@ async function main() {
     assert(!plan.users.some((u) => u.id === dId), "pending user exposed in plan users");
     const creator = plan.items.find((i) => i.createdById !== null)?.createdById;
     assert(!creator || plan.users.some((u) => u.id === creator), "creator names missing");
+  });
+
+  // 36 --------------------------------------------------------------
+  await scenario(36, "מנהל המערכת רואה בסרגל הצד תג עם מספר הבקשות הממתינות", async () => {
+    const n = (await json<{ count: number }>(admin, "GET", "/api/admin/pending-count")).body.count;
+    assert(n >= 1, `expected pending users, got ${n}`);
+    assert((await json(A, "GET", "/api/admin/pending-count")).status === 403, "regular user can read pending count");
+    await pAdmin.goto(`${BASE}/plan?view=gantt`);
+    const badge = pAdmin.locator("[data-testid=nav-admin] [data-testid=pending-badge]");
+    await badge.waitFor();
+    assert((await badge.innerText()).trim() === String(n), `badge shows ${await badge.innerText()} instead of ${n}`);
+    assert(!(await pa.locator("[data-testid=pending-badge]").count()), "badge visible to regular user");
+  });
+
+  // 37 --------------------------------------------------------------
+  await scenario(37, "סינונים ותצוגה נשמרים אישית לכל משתמש (גם אחרי רענון)", async () => {
+    await pa.goto(`${BASE}/plan?view=table`);
+    await pa.waitForSelector("[data-testid=table-view]");
+    await pa.fill("[data-testid=search]", `pref-${RUN}`);
+    await pa.waitForTimeout(1200); // השמירה מתבצעת אחרי השהיה קצרה
+    await pa.goto(`${BASE}/plan`); // בלי view — חוזר לתצוגה האחרונה (טבלה) עם אותו חיפוש
+    await pa.waitForSelector("[data-testid=table-view]");
+    assert((await pa.inputValue("[data-testid=search]")) === `pref-${RUN}`, "search filter not restored");
+    const pb = await uiLogin(browser, uC.email, PW).catch(() => null);
+    if (pb) {
+      await pb.waitForSelector("[data-testid=search]");
+      assert((await pb.inputValue("[data-testid=search]")) !== `pref-${RUN}`, "A's filter leaked to C");
+      await pb.context().close();
+    }
+    await pa.fill("[data-testid=search]", "");
+    await pa.waitForTimeout(1200);
+    await pa.goto(`${BASE}/plan?view=gantt`);
+    await pa.waitForSelector("[data-testid=gantt-view]");
+  });
+
+  // 38 --------------------------------------------------------------
+  await scenario(38, "השוואה בין שני Snapshots: הסדר לפי תאריך; מקווקו רק לתכולה שתאריכיה השתנו", async () => {
+    const row = await newRow(admin, T_SYS);
+    const far = addWeeks(cw, 60);
+    const moved = (await json<ItemDTO>(admin, "POST", "/api/items", { rowId: row.id, name: `זז-${RUN}`, startWeek: far, endWeek: far })).body;
+    const still = (await json<ItemDTO>(admin, "POST", "/api/items", { rowId: row.id, name: `נשאר-${RUN}`, startWeek: addWeeks(far, 6), endWeek: addWeeks(far, 6) })).body;
+    const sOld = (await json<{ id: number }>(admin, "POST", "/api/snapshots", { name: `ישן-${RUN}`, asOfDate: "2026-01-01" })).body;
+    await json(admin, "PATCH", `/api/items/${moved.id}`, { version: moved.version, patch: { startWeek: addWeeks(far, 2), endWeek: addWeeks(far, 2) } });
+    const sNew = (await json<{ id: number }>(admin, "POST", "/api/snapshots", { name: `חדש-${RUN}`, asOfDate: "2026-02-01" })).body;
+    // בחירה בסדר "הפוך" (החדש כצד א) — המערכת מסדרת לפי תאריך
+    await pAdmin.goto(`${BASE}/plan?view=compare&a=${sNew.id}&b=${sOld.id}`);
+    await pAdmin.waitForSelector(`[data-unit="${moved.id}"]`, { state: "attached" });
+    const sides = await pAdmin.locator("[data-testid=compare-sides]").innerText();
+    assert(sides.indexOf(`ישן-${RUN}`) < sides.indexOf(`חדש-${RUN}`) && sides.includes("תכנון"), `sides: ${sides}`);
+    assert(await pAdmin.locator(`[data-unit="${moved.id}"] [data-plan]`).count() === 1, "moved item has no dashed plan");
+    assert(await pAdmin.locator(`[data-unit="${moved.id}"] [data-link]`).count() === 1, "moved item has no connector");
+    assert(await pAdmin.locator(`[data-unit="${still.id}"] [data-plan]`).count() === 0, "unchanged item shows dashed plan");
+    assert(await pAdmin.locator(`[data-unit="${still.id}"] [data-actual]`).count() === 1, "unchanged item not shown");
+    // תאריך ה-Snapshot ניתן לעריכה
+    assert((await json(admin, "PATCH", `/api/snapshots/${sOld.id}`, { asOfDate: "2025-12-01" })).status === 200, "edit asOfDate failed");
+    const list = (await json<{ id: number; asOfDate: string }[]>(admin, "GET", "/api/snapshots")).body;
+    assert(list.find((s) => s.id === sOld.id)?.asOfDate === "2025-12-01", "asOfDate not updated");
   });
 
   await browser.close();

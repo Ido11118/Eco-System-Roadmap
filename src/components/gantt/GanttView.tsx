@@ -3,7 +3,7 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import {
-  Plus, MoreVertical, Trash2, ArrowUpToLine, ArrowDownToLine, Diamond, Flag, ExternalLink, PanelTopOpen,
+  Plus, MoreVertical, Trash2, ArrowUpToLine, ArrowDownToLine, Diamond, Flag, ExternalLink, PanelTopOpen, Pencil, Eye,
 } from "lucide-react";
 import type { ItemDTO, MilestoneDTO, PlanData, RowDTO, SprintDTO, ViewConfig } from "@/lib/types";
 import { STATUS_META, STATUSES, CROSS_ROW_LABELS, PRIORITY_META } from "@/lib/constants";
@@ -34,6 +34,7 @@ type DragState = {
 };
 type SelState = { rowId: number; laneKey: string; teamId: number | null; a: number; b: number; min: number; max: number };
 type QuickState = { rowId: number; laneKey: string; start: ISODate; end: ISODate; x: number; y: number };
+type SummaryState = { itemId: number; x: number; y: number };
 type MenuState = { x: number; y: number; lane?: LaneSpec; teamId: number | null; week?: ISODate; item?: ItemDTO };
 
 export type GanttHandle = { goToday: () => void };
@@ -55,6 +56,19 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   const [sel, setSel] = useState<SelState | null>(null);
   const [quick, setQuick] = useState<QuickState | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [summary, setSummary] = useState<SummaryState | null>(null);
+  // לחיצה אחת פותחת תקציר, לחיצה כפולה את חלונית העריכה — ממתינים רגע כדי להבחין ביניהן
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openSummary = useCallback((item: ItemDTO, x: number, y: number) => {
+    if (clickTimer.current) clearTimeout(clickTimer.current);
+    clickTimer.current = setTimeout(() => { clickTimer.current = null; setSummary({ itemId: item.id, x, y }); }, 250);
+  }, []);
+  const openFull = useCallback((id: number) => {
+    if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; }
+    setSummary(null);
+    ui.openItem(id);
+  }, [ui]);
+  useEffect(() => () => { if (clickTimer.current) clearTimeout(clickTimer.current); }, []);
   const dragRef = useRef<DragState | null>(null);
   dragRef.current = drag;
   // הנתונים העדכניים (כולל רענון שהגיע באמצע גרירה) — הגרירה בודקת חפיפות מולם ולא מול הנתונים מתחילת הגרירה
@@ -168,7 +182,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
       setDrag(null);
       if (!d0) return;
       const d = computeDrag(d0, e.clientX, e.clientY);
-      if (!d.started) { ui.openItem(d.item.id); return; }
+      if (!d.started) { openSummary(d.item, e.clientX, e.clientY); return; }
       if (!d.valid || (d.dWeeks === 0 && d.targetRowId === d.item.rowId)) return;
       const { start, end } = dragRange(d.item, d.mode, d.dWeeks);
       const patch: Parameters<PlanStore["updateItem"]>[1] = {};
@@ -244,8 +258,8 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     e.stopPropagation();
     (document.activeElement as HTMLElement | null)?.blur?.();
     e.preventDefault();
-    if (!editable) { ui.openItem(item.id); return; }
     tip.hide();
+    if (!editable) return; // ללא הרשאה אין גרירה — הלחיצה מטופלת ב-onClick
     setDrag({ item, mode, originX: e.clientX, originY: e.clientY, started: false, dWeeks: 0, targetRowId: item.rowId, valid: true });
   };
 
@@ -275,14 +289,15 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
           opts?.invalid && "!border-red-500 !bg-red-100 !text-red-700 ring-2 ring-red-300",
           isDragged && "opacity-30",
           dim && "opacity-25",
-          selected && "ring-2 ring-brand-500 ring-offset-1",
+          (selected || summary?.itemId === i.id) && "ring-2 ring-brand-500 ring-offset-1",
           box.cutStart && "rounded-r-none border-r-dashed",
           box.cutEnd && "rounded-l-none")}
         style={{ right: box.right, width: box.width, top: 3, height: height - 6, background: m.bg, color: m.fg, borderColor: m.border }}
         onMouseDown={(e) => startDrag(e, i, "move", editable)}
-        onMouseMove={(e) => { if (!drag) tip.show(itemTip(i), e); }}
+        onMouseMove={(e) => { if (!drag && summary?.itemId !== i.id) tip.show(itemTip(i), e, { delay: 600 }); }}
         onMouseLeave={tip.hide}
-        onDoubleClick={() => ui.openItem(i.id)}
+        onClick={editable ? undefined : (e) => openSummary(i, e.clientX, e.clientY)}
+        onDoubleClick={() => openFull(i.id)}
         role={opts?.ghost ? undefined : "button"} tabIndex={opts?.ghost ? undefined : 0}
         aria-label={opts?.ghost ? undefined : `${i.name}, ${STATUS_META[i.status].label}, שבועות ${weekNumber(i.startWeek)}–${weekNumber(i.endWeek)}`}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ui.openItem(i.id); } }}>
@@ -456,6 +471,13 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         </div>
       )}
 
+      {summary && (() => {
+        const it = data.items.find((x) => x.id === summary.itemId);
+        if (!it) return null;
+        return <ItemSummary item={it} data={data} point={summary} editable={store.canEditRow(data.rows.find((r) => r.id === it.rowId))}
+          onClose={() => setSummary(null)} onOpen={() => openFull(it.id)} />;
+      })()}
+
       {quick && <QuickCreate quick={quick} store={store} onClose={() => setQuick(null)}
         onMore={(name) => { const q = quick; setQuick(null); ui.openNewItem({ rowId: q.rowId, startWeek: q.start, endWeek: q.end, name }); }} />}
 
@@ -522,6 +544,34 @@ export function dragRange(item: ItemDTO, mode: DragState["mode"], d: number): { 
   if (mode === "move") return { start: add(item.startWeek, d), end: add(item.endWeek, d) };
   if (mode === "start") return { start: add(item.startWeek, d), end: item.endWeek };
   return { start: item.startWeek, end: add(item.endWeek, d) };
+}
+
+function ItemSummary({ item, data, point, editable, onClose, onOpen }: {
+  item: ItemDTO; data: PlanData; point: { x: number; y: number }; editable: boolean; onClose: () => void; onOpen: () => void;
+}) {
+  const m = STATUS_META[item.status];
+  return (
+    <Floating open point={point} onClose={onClose}>
+      <div className="w-[300px] p-3 text-[12.5px]" data-testid="item-summary">
+        <div className="mb-1.5 flex items-start gap-2">
+          <span className="mt-1 h-3 w-3 shrink-0 rounded-sm border" style={{ background: m.bg, borderColor: m.border }} />
+          <div className="font-semibold leading-snug text-ink-900">{item.name}</div>
+        </div>
+        <div className="space-y-0.5 text-ink-600">
+          <div>ID {item.id} · {m.label}{item.priority !== "NONE" ? ` · תיעדוף ${PRIORITY_META[item.priority].label}` : ""}</div>
+          <div className="tabular-nums">שבועות {weekNumber(item.startWeek)}–{weekNumber(item.endWeek)} · {fmtDate(item.startWeek)}–{fmtDate(weekEndOf(item.endWeek))}</div>
+          {item.notes && <div className="line-clamp-3 whitespace-pre-line text-ink-500">{item.notes}</div>}
+          <div className="text-ink-400">עודכן ע״י {userName(data, item.updatedById)}</div>
+        </div>
+        <div className="mt-2.5 flex items-center gap-2">
+          <button className="btn-primary btn-sm gap-1" autoFocus onClick={onOpen} data-testid="summary-open">
+            {editable ? <><Pencil size={13} /> עריכה</> : <><Eye size={13} /> פרטים מלאים</>}
+          </button>
+          <span className="mr-auto text-[11px] text-ink-400">לחיצה כפולה פותחת ישירות</span>
+        </div>
+      </div>
+    </Floating>
+  );
 }
 
 function QuickCreate({ quick, store, onClose, onMore }: { quick: QuickState; store: PlanStore; onClose: () => void; onMore: (name: string) => void }) {

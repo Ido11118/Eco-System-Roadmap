@@ -93,6 +93,9 @@ export const preferencesSchema = z.object({
   showSprints: z.boolean().optional(),
   density: z.enum(["compact", "normal", "wide"]).optional(),
   tableColumnWidths: z.record(z.string(), z.number().min(40).max(1000)).optional(),
+  lastView: viewConfigSchema.optional(),
+  lastMode: z.enum(["gantt", "table", "compare"]).optional(),
+  sidebarCollapsed: z.boolean().optional(),
 }).strict();
 
 export const adminUserActionSchema = z.discriminatedUnion("action", [
@@ -130,6 +133,12 @@ export const planDataSchema = z.object({
 export const snapshotCreateSchema = z.object({
   name: z.string().trim().min(1, "יש להזין שם ל-Snapshot").max(150),
   description: z.string().max(2000).default(""),
+  asOfDate: isoDate.optional(),
+});
+export const snapshotMetaSchema = z.object({
+  name: z.string().trim().min(1, "יש להזין שם ל-Snapshot").max(150).optional(),
+  description: z.string().max(2000).optional(),
+  asOfDate: isoDate.optional(),
 });
 export const snapshotRevisionSchema = z.object({
   baseRevisionId: id,

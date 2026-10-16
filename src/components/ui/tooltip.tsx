@@ -3,21 +3,36 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createPortal } from "react-dom";
 
 // Tooltip גלובלי אחד שעוקב אחרי העכבר — חסכוני גם בגאנט עם מאות קוביות
-type Ctx = { show: (content: React.ReactNode, e: { clientX: number; clientY: number }) => void; hide: () => void };
+// delay: השהיה (מ"ש) לפני ההופעה — כדי שמעבר עכבר מהיר על פני הגאנט לא יקפיץ חלונות
+type Ctx = { show: (content: React.ReactNode, e: { clientX: number; clientY: number }, opts?: { delay?: number }) => void; hide: () => void };
 const TipCtx = createContext<Ctx | null>(null);
 
 export function TooltipProvider({ children }: { children: React.ReactNode }) {
   const [tip, setTip] = useState<{ content: React.ReactNode; x: number; y: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
-  const show = useCallback<Ctx["show"]>((content, e) => setTip({ content, x: e.clientX, y: e.clientY }), []);
-  const hide = useCallback(() => setTip(null), []);
+  const visible = useRef(false);
+  const pending = useRef<{ content: React.ReactNode; x: number; y: number } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const show = useCallback<Ctx["show"]>((content, e, opts) => {
+    const next = { content, x: e.clientX, y: e.clientY };
+    if (visible.current || !opts?.delay) { visible.current = true; setTip(next); return; }
+    pending.current = next; // עדכון מיקום בזמן ההמתנה, בלי לאתחל את הטיימר
+    if (!timer.current) timer.current = setTimeout(() => {
+      timer.current = null;
+      if (pending.current) { visible.current = true; setTip(pending.current); }
+    }, opts.delay);
+  }, []);
+  const hide = useCallback(() => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    pending.current = null; visible.current = false;
+    setTip(null);
+  }, []);
   const value = useMemo(() => ({ show, hide }), [show, hide]); // ערך יציב — הצרכנים לא מתרנדרים בכל תזוזת עכבר
   useEffect(() => {
-    const h = () => setTip(null);
-    window.addEventListener("scroll", h, true);
-    window.addEventListener("mousedown", h, true);
-    return () => { window.removeEventListener("scroll", h, true); window.removeEventListener("mousedown", h, true); };
-  }, []);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("mousedown", hide, true);
+    return () => { window.removeEventListener("scroll", hide, true); window.removeEventListener("mousedown", hide, true); hide(); };
+  }, [hide]);
   let left = 0, top = 0;
   if (tip) {
     const w = ref.current?.offsetWidth ?? 260, h = ref.current?.offsetHeight ?? 60;

@@ -8,6 +8,8 @@ import { defaultViewConfig } from "./filters";
 let cache: UserPreferences | null = null;
 
 export function currentPrefs(initial: UserPreferences): UserPreferences {
+  // בשרת (SSR) המודול משותף לכל המשתמשים — אסור לשמור בו מטמון, אחרת העדפות של משתמש אחד ידלפו לאחר
+  if (typeof window === "undefined") return initial;
   if (!cache) cache = { ...initial };
   return cache;
 }

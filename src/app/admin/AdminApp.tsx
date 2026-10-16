@@ -6,6 +6,7 @@ import { Check, X, PauseCircle, PlayCircle, KeyRound, Copy, Eye, Save } from "lu
 import type { Me } from "@/lib/types";
 import { api } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
+import { AppShell } from "@/components/AppShell";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm, Dialog } from "@/components/ui/dialog";
 import { fmtTs } from "@/components/plan/ui";
@@ -24,8 +25,8 @@ export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name:
   const users = q.data ?? [];
   const pending = users.filter((u) => u.status === "PENDING");
   return (
-    <div className="flex h-screen w-full flex-col overflow-hidden">
-      <TopBar me={me} active="admin" />
+    <AppShell me={me} active="admin">
+      <TopBar me={me}><span className="text-[14px] font-semibold text-ink-900">ניהול מערכת</span></TopBar>
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-[1200px] px-6 py-6">
           <h1 className="text-[20px] font-bold">ניהול משתמשים והרשאות</h1>
@@ -45,7 +46,7 @@ export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name:
           </div>
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }
 
@@ -69,6 +70,7 @@ function UserCard({ u, domains }: { u: AdminUser; domains: { id: number; name: s
       const r = await api<{ link?: string }>("POST", `/api/admin/users/${u.id}`, body);
       if (r.link) setLink(r.link); else toast.show("success", msg);
       qc.invalidateQueries({ queryKey: ["admin-users"] });
+      qc.invalidateQueries({ queryKey: ["pending-count"] });
     } catch (e) { toast.show("error", (e as Error).message); }
   };
   const name = (id: number) => domains.find((d) => d.id === id)?.name ?? `#${id}`;

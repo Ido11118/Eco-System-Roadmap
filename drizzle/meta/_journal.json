@@ -15,6 +15,13 @@
       "when": 1791553847589,
       "tag": "0001_overlap_exclusion",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792062130154,
+      "tag": "0002_snapshot_as_of_date",
+      "breakpoints": true
     }
   ]
 }

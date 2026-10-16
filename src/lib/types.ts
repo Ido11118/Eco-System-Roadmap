@@ -62,6 +62,9 @@ export type UserPreferences = {
   showSprints?: boolean;
   density?: "compact" | "normal" | "wide";
   tableColumnWidths?: Record<string, number>;
+  lastView?: ViewConfig; // הסינונים והגדרות התצוגה האחרונים — משוחזרים בכניסה הבאה
+  lastMode?: "gantt" | "table" | "compare"; // התצוגה האחרונה שבה המשתמש עבד
+  sidebarCollapsed?: boolean;
 };
 
 export type ViewConfig = {
@@ -89,6 +92,7 @@ export type SnapshotMeta = {
   id: number;
   name: string;
   description: string;
+  asOfDate: ISODate; // תאריך המצב שה-Snapshot מייצג
   createdAt: string;
   createdBy: string;
   currentRevisionId: number;

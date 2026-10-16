@@ -6,5 +6,5 @@ export const GET = route(async () => { await requireApproved(); return listSnaps
 export const POST = route(async (req) => {
   const me = await requireSuper();
   const v = snapshotCreateSchema.parse(await body(req));
-  return createSnapshot(me, v.name, v.description);
+  return createSnapshot(me, v.name, v.description, v.asOfDate);
 });

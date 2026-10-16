@@ -161,6 +161,8 @@ export const snapshots = pgTable("snapshots", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   description: text("description").notNull().default(""),
+  // תאריך המצב שה-Snapshot מייצג (ניתן לעריכה). קובע בהשוואה מה "תכנון" (מוקדם) ומה "ביצוע" (מאוחר)
+  asOfDate: date("as_of_date", { mode: "string" }).notNull().default(sql`CURRENT_DATE`),
   createdAt: ts("created_at").notNull().defaultNow(),
   createdById: integer("created_by_id").notNull().references(() => users.id),
   currentRevisionId: integer("current_revision_id"),

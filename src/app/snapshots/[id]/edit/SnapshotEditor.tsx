@@ -7,6 +7,7 @@ import { Save, X, Loader2, Pencil, GanttChart, Table2 } from "lucide-react";
 import type { Me, PlanData, ViewConfig } from "@/lib/types";
 import { api } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
+import { AppShell } from "@/components/AppShell";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/dialog";
 import { useDraftPlan } from "@/components/plan/store";
@@ -61,8 +62,8 @@ export function SnapshotEditor({ me, id }: { me: Me; id: number }) {
 
   return (
     <WorkspaceUIProvider store={store} me={me}>
-      <div className="flex h-screen w-full flex-col overflow-hidden">
-        <TopBar me={me} active="snapshots">
+      <AppShell me={me} active="snapshots">
+        <TopBar me={me}>
           <div className="flex items-center rounded-lg bg-ink-100 p-0.5">
             {([["gantt", "גאנט", <GanttChart key="g" size={14} />], ["table", "תכולות", <Table2 key="t" size={14} />]] as const).map(([m, l, i]) => (
               <button key={m} onClick={() => setMode(m)} className={clsx("flex items-center gap-1.5 rounded-md px-3 py-1 text-[13px] font-medium", mode === m ? "bg-white shadow-sm" : "text-ink-500")}>{i}{l}</button>
@@ -88,7 +89,7 @@ export function SnapshotEditor({ me, id }: { me: Me; id: number }) {
           {store.data && mode === "gantt" && <GanttView ref={ganttRef} store={store} view={view} />}
           {store.data && mode === "table" && <TableView store={store} view={view} me={me} />}
         </main>
-      </div>
+      </AppShell>
     </WorkspaceUIProvider>
   );
 }

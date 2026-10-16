@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCompareLayout, buildCompareUnits, summarize, layoutLanes, mergeSegments, segmentsOverlap } from "@/lib/compare";
+import { buildCompareLayout, buildCompareUnits, summarize, layoutLanes, mergeSegments, segmentsOverlap, datesChanged } from "@/lib/compare";
 import type { ItemDTO, PlanData } from "@/lib/types";
 import { sundayOfWeekNumber } from "@/lib/weeks";
 
@@ -45,12 +45,22 @@ describe("compare by ID", () => {
     expect(L.lanes.get("team:10")!.filter((l) => l.rowId === 1).length).toBe(1);
   });
 
-  it("uses the gap between non-contiguous plan/actual segments", () => {
-    // ID 1: תוכנן 1-2, בפועל 9-10. ID 2: 4-6 בשתי הגרסאות -> נכנס לרווח, ללא שורה נוספת
+  it("treats the gap between plan and actual as occupied (another ID moves to its own lane)", () => {
+    // ID 1: תוכנן 1-2, בפועל 9-10. ID 2: 4-6 בשתי הגרסאות -> יושב ברווח של ID 1, ולכן עובר לשורה נפרדת
     const snap = plan([item(1, "a", 1, 2), item(2, "b", 4, 6)]);
     const cur = plan([item(1, "a", 9, 10), item(2, "b", 4, 6)]);
-    const L = buildCompareLayout(snap, cur);
-    expect(L.lanes.get("team:10")!.filter((l) => l.rowId === 1).length).toBe(1);
+    const lanes = buildCompareLayout(snap, cur).lanes.get("team:10")!.filter((l) => l.rowId === 1);
+    expect(lanes.length).toBe(2);
+    expect(lanes.map((l) => l.units.map((u) => u.id))).toEqual([[1], [2]]);
+  });
+
+  it("datesChanged: only date changes count, not status or name", () => {
+    const snap = plan([item(1, "a", 1, 2), item(2, "b", 4, 6), item(3, "c", 7, 8)]);
+    const cur = plan([item(1, "a2", 1, 2, { status: "DONE" }), item(2, "b", 4, 7), item(3, "c", 8, 9)]);
+    const U = new Map(buildCompareUnits(snap, cur).map((u) => [u.id, u]));
+    expect(datesChanged(U.get(1)!)).toBe(false);
+    expect(datesChanged(U.get(2)!)).toBe(true);
+    expect(datesChanged(U.get(3)!)).toBe(true);
   });
 
   it("matches by ID, not name; detects all cases", () => {
@@ -112,7 +122,7 @@ describe("compare by ID", () => {
     expect(lane.units[0].plan && lane.units[0].actual).toBeTruthy();
   });
 
-  it("stress: random data never splits an ID and never overlaps two IDs in a lane", () => {
+  it("stress: random data never splits an ID and never overlaps two IDs (incl. gaps) in a lane", () => {
     let seed = 7;
     const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
     for (let round = 0; round < 50; round++) {
@@ -131,7 +141,8 @@ describe("compare by ID", () => {
           const ss: [number, number][] = [];
           if (u.plan) ss.push([+u.plan.start.replaceAll("-", ""), +u.plan.end.replaceAll("-", "")]);
           if (u.actual) ss.push([+u.actual.start.replaceAll("-", ""), +u.actual.end.replaceAll("-", "")]);
-          return mergeSegments(ss);
+          const m = mergeSegments(ss); // התפוסה = כל הטווח מתכנון עד ביצוע, כולל הרווח
+          return [[m[0][0], m[m.length - 1][1]]] as [number, number][];
         });
         for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++) expect(segmentsOverlap(segs[i], segs[j])).toBe(false);
         for (const u of lane.units) { expect(seen.has(u.id)).toBe(false); seen.add(u.id); }

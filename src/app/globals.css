@@ -67,6 +67,27 @@ body {
   background: repeating-linear-gradient(-45deg, rgba(100,116,139,.10) 0 4px, rgba(100,116,139,.02) 4px 8px);
   border: 1.5px dashed #64748b;
 }
+/* תכנון מול ביצוע: המצב המתוכנן מוצג רק כשהתאריכים השתנו — מסגרת מקווקוות שקופה */
+.plan-dash {
+  border: 1.5px dashed #94a3b8;
+  background: rgba(148, 163, 184, .06);
+}
+.plan-dash.is-deleted { border-color: #f87171; background: rgba(254, 226, 226, .45); }
+.plan-link { background: #94a3b8; }
+.plan-link::after { /* חץ קטן בכיוון הביצוע */
+  content: ""; position: absolute; top: -3px; width: 0; height: 0;
+  border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent;
+}
+.plan-link[data-dir="later"]::after { left: -1px; border-right: 5px solid #94a3b8; }
+.plan-link[data-dir="earlier"]::after { right: -1px; border-left: 5px solid #94a3b8; }
+/* הדגשה בריחוף: התכנון והביצוע של אותה תכולה מודגשים, השאר מתעמעם */
+[data-testid="compare-view"] [data-unit] { transition: opacity .12s; }
+.cmp-hot [data-unit]:not(.is-hot) { opacity: .3; }
+[data-unit].is-hot .plan-dash { border-color: #2563eb; background: rgba(37, 99, 235, .07); }
+[data-unit].is-hot .plan-link { background: #2563eb; }
+[data-unit].is-hot .plan-link[data-dir="later"]::after { border-right-color: #2563eb; }
+[data-unit].is-hot .plan-link[data-dir="earlier"]::after { border-left-color: #2563eb; }
+[data-unit].is-hot [data-actual] { box-shadow: 0 0 0 2px #2563eb; }
 .select-range { background: rgba(37, 99, 235, .14); outline: 1.5px solid rgba(37, 99, 235, .6); }
 .readonly-hatch { background-color: #fcfcfd; }
 .gantt-timeline.readonly-hatch {

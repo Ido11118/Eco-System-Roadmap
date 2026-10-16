@@ -1,12 +1,13 @@
 "use client";
-// מצב "תכנון מול ביצוע": קריאה בלבד. כל ID = יחידת תצוגה אחת (תכנון + מצב נוכחי באותה שורה וירטואלית).
+// מצב "תכנון מול ביצוע": קריאה בלבד. משווה שני מצבים (Snapshot / מצב נוכחי) — המוקדם הוא התכנון.
+// כל ID = יחידת תצוגה אחת. תכולה שתאריכיה לא השתנו מוצגת כרגיל; אם השתנו — המיקום המתוכנן מוצג במקווקו באותה שורה, עם קו מחבר.
 import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { PlanData, ViewConfig } from "@/lib/types";
 import { STATUS_META } from "@/lib/constants";
 import {
-  buildCompareLayout, summarize, COMPARE_FILTERS, TAG_LABELS, type CompareUnit,
+  buildCompareLayout, summarize, datesChanged, COMPARE_FILTERS, TAG_LABELS, type CompareUnit,
 } from "@/lib/compare";
 import { buildTimeline, fmtDate, weekEndOf, weekNumber, type ISODate } from "@/lib/weeks";
 import { useTooltip } from "@/components/ui/tooltip";
@@ -18,8 +19,9 @@ import { geometry } from "./geometry";
 export type CompareHandle = { goToday: () => void };
 
 export const CompareView = memo(forwardRef<CompareHandle, {
-  current: PlanData; baseline: PlanData; view: ViewConfig; filterKey: string; onFilterKey: (k: string) => void; baselineLabel: string;
-}>(function CompareView({ current, baseline, view, filterKey, onFilterKey, baselineLabel }, ref) {
+  current: PlanData; baseline: PlanData; view: ViewConfig; filterKey: string; onFilterKey: (k: string) => void;
+  planLabel: string; actualLabel: string;
+}>(function CompareView({ current, baseline, view, filterKey, onFilterKey, planLabel, actualLabel }, ref) {
   const tip = useTooltip();
   const ui = useWorkspaceUI();
   const gridRef = useRef<GanttGridHandle>(null);
@@ -92,8 +94,8 @@ export const CompareView = memo(forwardRef<CompareHandle, {
     <div className="space-y-0.5">
       <div className="font-semibold">{u.name} <span className="font-normal opacity-70">· ID {u.id}</span></div>
       <div>תוכנן: {u.plan ? `שבועות ${weekNumber(u.plan.start)}–${weekNumber(u.plan.end)} (${fmtDate(u.plan.start)}–${fmtDate(weekEndOf(u.plan.end))})` : "לא היה בתכנון"}</div>
-      <div>מצב נוכחי: {u.actual ? `שבועות ${weekNumber(u.actual.start)}–${weekNumber(u.actual.end)} (${fmtDate(u.actual.start)}–${fmtDate(weekEndOf(u.actual.end))})` : "נמחק"}</div>
-      {u.actual && <div>סטטוס נוכחי: {STATUS_META[u.actual.status].label}{u.plan && u.plan.status !== u.actual.status ? ` (בתכנון: ${STATUS_META[u.plan.status].label})` : ""}</div>}
+      <div>ביצוע: {u.actual ? `שבועות ${weekNumber(u.actual.start)}–${weekNumber(u.actual.end)} (${fmtDate(u.actual.start)}–${fmtDate(weekEndOf(u.actual.end))})` : "נמחק"}</div>
+      {u.actual && <div>סטטוס: {STATUS_META[u.actual.status].label}{u.plan && u.plan.status !== u.actual.status ? ` (בתכנון: ${STATUS_META[u.plan.status].label})` : ""}</div>}
       {u.startDelta !== null && (u.startDelta !== 0 || u.endDelta !== 0) && (
         <div>הפרש: התחלה {fmtDelta(u.startDelta)} · סיום {fmtDelta(u.endDelta!)}</div>
       )}
@@ -102,35 +104,57 @@ export const CompareView = memo(forwardRef<CompareHandle, {
     </div>
   );
 
+  // הדגשה בריחוף דרך מחלקות CSS ישירות על ה-DOM — בלי רינדור מחדש של כל הגאנט בכל תזוזת עכבר
+  const hot = (e: React.MouseEvent, on: boolean) => {
+    const unit = (e.currentTarget as HTMLElement).closest("[data-unit]");
+    const root = (e.currentTarget as HTMLElement).closest("[data-testid=compare-view]");
+    unit?.classList.toggle("is-hot", on);
+    root?.classList.toggle("cmp-hot", on);
+  };
+
   const renderLane = (lane: LaneSpec) => {
     const units = laneUnits.get(lane.key) ?? [];
     const h = lane.height;
     return units.map((u) => {
-      const pb = u.plan ? box(u.plan.start, u.plan.end) : null;
-      const ab = u.actual ? box(u.actual.start, u.actual.end) : null;
       const deleted = !u.actual;
       const added = !u.plan;
+      const changed = datesChanged(u);
+      // המצב המתוכנן מוצג רק אם התאריכים השתנו (או שהתכולה נמחקה). תכולה שלא זזה מוצגת כרגיל.
+      const pb = u.plan && (changed || deleted) ? box(u.plan.start, u.plan.end) : null;
+      const ab = u.actual ? box(u.actual.start, u.actual.end) : null;
       const m = u.actual ? STATUS_META[u.actual.status] : null;
       const events = {
-        onMouseMove: (e: React.MouseEvent) => tip.show(unitTip(u), e),
-        onMouseLeave: tip.hide,
+        onMouseMove: (e: React.MouseEvent) => tip.show(unitTip(u), e, { delay: 600 }),
+        onMouseEnter: (e: React.MouseEvent) => hot(e, true),
+        onMouseLeave: (e: React.MouseEvent) => { tip.hide(); hot(e, false); },
         onClick: () => { if (u.actual) ui.openItem(u.id); },
       };
+      // קו מחבר בין המצב המתוכנן למצב בביצוע (רק כשיש רווח ביניהם)
+      let link: { right: number; width: number; dir: "later" | "earlier" } | null = null;
+      if (changed && u.plan && u.actual) {
+        const pS = timeline.indexOf(u.plan.start), pE = timeline.indexOf(u.plan.end);
+        const aS = timeline.indexOf(u.actual.start), aE = timeline.indexOf(u.actual.end);
+        const seg = aS > pE ? { from: pE + 1, to: aS, dir: "later" as const } : aE < pS ? { from: aE + 1, to: pS, dir: "earlier" as const } : null;
+        if (seg && seg.to > seg.from) {
+          const r0 = Math.max(0, seg.from * weekW - 3), r1 = Math.min(n * weekW, seg.to * weekW + 3);
+          if (r1 > r0) link = { right: r0, width: r1 - r0, dir: seg.dir };
+        }
+      }
       return (
         <div key={u.id} data-unit={u.id}>
           {pb && (
             <div {...events} data-plan={u.id}
-              className={clsx("plan-ghost absolute z-10 flex items-center overflow-hidden rounded-[4px] text-[10.5px] text-ink-700",
-                deleted && "!border-red-400 !bg-red-50/70 cursor-default")}
-              style={deleted ? { right: pb.right, width: pb.width, top: 4, height: h - 8 } : { right: pb.right, width: pb.width, top: 3, height: 10 }}>
-              {deleted && <span className="truncate px-1.5 text-[11.5px] line-through decoration-red-400">{u.name} · נמחק</span>}
+              className={clsx("plan-dash absolute z-10 flex items-center overflow-hidden rounded-[5px]", deleted ? "is-deleted cursor-default" : "cursor-pointer")}
+              style={{ right: pb.right, width: pb.width, top: 2, height: h - 4 }}>
+              {deleted && <span className="truncate px-1.5 text-[11.5px] text-red-700 line-through decoration-red-400">{u.name} · נמחק</span>}
             </div>
           )}
+          {link && <div className="plan-link pointer-events-none absolute z-[9]" data-link={u.id} data-dir={link.dir}
+            style={{ right: link.right, width: link.width, top: h / 2 - 0.75, height: 1.5 }} />}
           {ab && m && (
             <div {...events} data-actual={u.id}
-              className={clsx("gantt-bar absolute z-[11] flex cursor-pointer items-center gap-1 overflow-hidden rounded-[5px] border text-[11.5px] font-medium",
-                added && "ring-1 ring-offset-1 ring-brand-400")}
-              style={{ right: ab.right, width: ab.width, top: added ? 6 : 15, height: added ? h - 12 : h - 19, background: m.bg, color: m.fg, borderColor: m.border }}>
+              className="gantt-bar absolute z-[11] flex cursor-pointer items-center gap-1 overflow-hidden rounded-[5px] border text-[12px] font-medium"
+              style={{ right: ab.right + (changed ? 2 : 0), width: ab.width - (changed ? 4 : 0), top: changed ? 6 : 3, height: changed ? h - 12 : h - 6, background: m.bg, color: m.fg, borderColor: m.border }}>
               {added && <span className="mr-1 shrink-0 rounded bg-brand-600 px-1 text-[9.5px] font-bold text-white">חדש</span>}
               <span className="truncate px-1">{u.name}</span>
             </div>
@@ -142,7 +166,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
 
   return (
     <div className="flex h-full flex-col" data-testid="compare-view">
-      <CompareSummaryBar summary={summary} units={summaryUnits} current={{ ...current, ...structure }} filterKey={filterKey} onFilterKey={onFilterKey} baselineLabel={baselineLabel} />
+      <CompareSummaryBar summary={summary} units={summaryUnits} current={{ ...current, ...structure }} filterKey={filterKey} onFilterKey={onFilterKey} planLabel={planLabel} actualLabel={actualLabel} />
       <div className="min-h-0 flex-1">
         <GanttGrid ref={gridRef} timeline={timeline} weekW={weekW} domains={structure.domains}
           teams={structure.teams.filter((t) => teamsVisible.has(t.id))}
@@ -159,13 +183,13 @@ function fmtDelta(d: number) {
   return d > 0 ? `+${d} שב׳` : `${d} שב׳`;
 }
 
-function CompareSummaryBar({ summary: s, units, current, filterKey, onFilterKey, baselineLabel }: {
-  summary: ReturnType<typeof summarize>; units: CompareUnit[]; current: PlanData; filterKey: string; onFilterKey: (k: string) => void; baselineLabel: string;
+function CompareSummaryBar({ summary: s, units, current, filterKey, onFilterKey, planLabel, actualLabel }: {
+  summary: ReturnType<typeof summarize>; units: CompareUnit[]; current: PlanData; filterKey: string; onFilterKey: (k: string) => void; planLabel: string; actualLabel: string;
 }) {
   const [open, setOpen] = useState(false);
   const pct = (x: number) => (s.planned ? Math.round((x / s.planned) * 100) : 0);
   const tiles: { k: string; label: string; v: number; sub?: string; color: string }[] = [
-    { k: "all", label: "תוכננו", v: s.planned, sub: "ב-Snapshot", color: "#334155" },
+    { k: "all", label: "תוכננו", v: s.planned, sub: "במצב התכנון", color: "#334155" },
     { k: "completed", label: "הושלמו", v: s.completed, sub: `${pct(s.completed)}% מהתכנון`, color: "#15803d" },
     { k: "notCompleted", label: "לא הושלמו", v: s.notCompleted, sub: `${pct(s.notCompleted)}%`, color: "#d97706" },
     { k: "delayed", label: "נדחו", v: s.delayed, sub: "בטווח הזמן", color: "#ca8a04" },
@@ -195,9 +219,14 @@ function CompareSummaryBar({ summary: s, units, current, filterKey, onFilterKey,
           </button>
         ))}
         <div className="mr-auto flex flex-col justify-between gap-1 text-[11.5px] text-ink-500">
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1.5"><span className="plan-ghost inline-block h-2.5 w-7 rounded-sm" />תכנון ({baselineLabel})</span>
-            <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-7 rounded-sm border border-amber-600 bg-amber-500" />מצב נוכחי</span>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="compare-sides">
+            <span>תכנון: <b className="text-ink-700">{planLabel}</b></span>
+            <span className="text-ink-300">←</span>
+            <span>ביצוע: <b className="text-ink-700">{actualLabel}</b></span>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="flex items-center gap-1.5"><span className="plan-dash inline-block h-3 w-7 rounded-sm" />מיקום מתוכנן (רק אם השתנה)</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-7 rounded-sm border border-amber-600 bg-amber-500" />ביצוע</span>
             <span className="flex items-center gap-1.5"><span className="rounded bg-brand-600 px-1 text-[9.5px] font-bold text-white">חדש</span>נוסף אחרי התכנון</span>
           </div>
           <div className="flex items-center gap-2">
@@ -229,7 +258,7 @@ function CompareSummaryBar({ summary: s, units, current, filterKey, onFilterKey,
             </tbody>
           </table>
           <p className="border-t border-ink-100 bg-ink-50/50 px-2.5 py-1.5 text-[11px] text-ink-500">
-            תוכננו = הושלמו + לא הושלמו + בוטלו + נמחקו (מתוך תכולות ה-Snapshot בלבד). &quot;נדחו&quot; הוא מדד זמן נפרד. &quot;נוספו&quot; אינן נכללות באחוז ההשלמה.
+            תוכננו = הושלמו + לא הושלמו + בוטלו + נמחקו (מתוך תכולות מצב התכנון בלבד). &quot;נדחו&quot; הוא מדד זמן נפרד. &quot;נוספו&quot; אינן נכללות באחוז ההשלמה.
           </p>
         </div>
       )}

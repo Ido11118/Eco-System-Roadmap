@@ -4,18 +4,28 @@
 
 ## הרצה מקומית
 
+```bash
+npx next dev -p 3001
+```
+
+ואז לפתוח בדפדפן את http://localhost:3001. לעצירה: `Ctrl+C`.
+
+<details>
+<summary>הכנה חד-פעמית (רק בפעם הראשונה על מחשב חדש)</summary>
+
 דרישות: Node 22 ומעלה, ו-PostgreSQL 14 ומעלה שרץ על המחשב.
 
 ```bash
 npm install
-createdb workplan                              # יצירת בסיס נתונים מקומי (פעם אחת)
-cp .env.example .env                           # ואז לערוך: DATABASE_URL, APP_URL=http://localhost:3000, SUPERUSER_EMAIL, SUPERUSER_PASSWORD
+createdb workplan                              # יצירת בסיס נתונים מקומי
+cp .env.example .env                           # ואז לערוך: DATABASE_URL, APP_URL=http://localhost:3001, SUPERUSER_EMAIL, SUPERUSER_PASSWORD
 npm run db:migrate && npm run db:seed          # טבלאות, מבנה התחומים והצוותים, ו-Super User
 npm run db:demo                                # אופציונלי: נתוני הדגמה
-npm run dev                                    # http://localhost:3000
 ```
 
 התחברות: עם `SUPERUSER_EMAIL` ו-`SUPERUSER_PASSWORD` שהוגדרו ב-`.env`.
+
+</details>
 
 ---
 

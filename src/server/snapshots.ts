@@ -5,6 +5,7 @@ import { snapshots, snapshotRevisions, users } from "@/db/schema";
 import type { Me, PlanData, SnapshotMeta } from "@/lib/types";
 import { ApiError } from "./errors";
 import { audit, loadPlan } from "./plan";
+import { todayIL } from "@/lib/weeks";
 
 export async function listSnapshots(): Promise<SnapshotMeta[]> {
   const rows = await db.select({
@@ -18,17 +19,17 @@ export async function listSnapshots(): Promise<SnapshotMeta[]> {
     .where(isNull(snapshots.deletedAt))
     .orderBy(desc(snapshots.createdAt));
   return rows.map((r) => ({
-    id: r.s.id, name: r.s.name, description: r.s.description, createdAt: r.s.createdAt.toISOString(),
+    id: r.s.id, name: r.s.name, description: r.s.description, asOfDate: r.s.asOfDate, createdAt: r.s.createdAt.toISOString(),
     createdBy: r.createdBy ?? "", currentRevisionId: r.s.currentRevisionId!, currentRevisionNo: r.revNo ?? 1,
     revisionCount: r.revCount,
   }));
 }
 
 /** יצירת Snapshot: עותק מלא ועקבי (טרנזקציה REPEATABLE READ) של התוכנית הנוכחית. התוכנית עצמה אינה משתנה. */
-export async function createSnapshot(me: Me, name: string, description: string) {
+export async function createSnapshot(me: Me, name: string, description: string, asOfDate: string = todayIL()) {
   return db.transaction(async (tx) => {
     const data = await loadPlan(tx);
-    const [s] = await tx.insert(snapshots).values({ name, description, createdById: me.id }).returning();
+    const [s] = await tx.insert(snapshots).values({ name, description, asOfDate, createdById: me.id }).returning();
     const [rev] = await tx.insert(snapshotRevisions).values({
       snapshotId: s.id, revisionNo: 1, data, note: "גרסה מקורית", createdById: me.id,
     }).returning();
@@ -46,7 +47,7 @@ export async function getSnapshotRevision(snapshotId: number, revisionId?: numbe
     .where(and(eq(snapshotRevisions.id, revId), eq(snapshotRevisions.snapshotId, snapshotId)));
   if (!rev) throw new ApiError(404, "הגרסה לא נמצאה");
   return {
-    snapshot: { id: s.id, name: s.name, description: s.description, currentRevisionId: s.currentRevisionId },
+    snapshot: { id: s.id, name: s.name, description: s.description, asOfDate: s.asOfDate, currentRevisionId: s.currentRevisionId },
     revision: { id: rev.id, revisionNo: rev.revisionNo, note: rev.note, createdAt: rev.createdAt.toISOString() },
     data: rev.data as PlanData,
   };
@@ -127,7 +128,7 @@ export async function restoreRevision(me: Me, snapshotId: number, revisionId: nu
   return saveRevision(me, snapshotId, snapshot.currentRevisionId!, `שחזור מגרסה ${revision.revisionNo}`, data);
 }
 
-export async function updateSnapshotMeta(me: Me, id: number, patch: { name?: string; description?: string }) {
+export async function updateSnapshotMeta(me: Me, id: number, patch: { name?: string; description?: string; asOfDate?: string }) {
   const [s] = await db.update(snapshots).set(patch).where(and(eq(snapshots.id, id), isNull(snapshots.deletedAt))).returning();
   if (!s) throw new ApiError(404, "ה-Snapshot לא נמצא");
   await audit(db, me.id, "snapshot", id, "update", patch, "עודכנו פרטי Snapshot");

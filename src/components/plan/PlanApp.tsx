@@ -3,32 +3,55 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { GanttChart, Table2, GitCompareArrows, Plus, Camera, Eye, AlertCircle, Loader2, Lock } from "lucide-react";
+import { GitCompareArrows, Plus, Camera, Eye, AlertCircle, Loader2, Lock } from "lucide-react";
 import type { Me, PlanData, SnapshotMeta, ViewConfig } from "@/lib/types";
 import { STATUSES, STATUS_META } from "@/lib/constants";
+import { fmtDate, todayIL, isISODate } from "@/lib/weeks";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { Dialog } from "@/components/ui/dialog";
 import { TopBar } from "@/components/TopBar";
+import { AppShell } from "@/components/AppShell";
 import { GanttView, type GanttHandle } from "@/components/gantt/GanttView";
 import { CompareView, type CompareHandle } from "@/components/gantt/CompareView";
 import { TableView } from "@/components/table/TableView";
 import { useLivePlan, readOnlyStore, type PlanStore } from "./store";
-import { WorkspaceUIProvider, useWorkspaceUI, fmtTs } from "./ui";
+import { WorkspaceUIProvider, useWorkspaceUI } from "./ui";
 import { FilterBar, type SavedView } from "./FilterBar";
 import { defaultViewConfig } from "./filters";
 import { currentPrefs, sanitizeView, savePrefs } from "./prefs";
 
 type Mode = "gantt" | "table" | "compare";
+const MODES: Mode[] = ["gantt", "table", "compare"];
+type SnapResp = { data: PlanData; revision: { revisionNo: number; createdAt: string } };
+
+/** צד בהשוואה: המצב הנוכחי, או Snapshot (ואופציונלית גרסה מסוימת שלו). בכתובת: "live" / "12" / "12:34" */
+type Side = { kind: "live" } | { kind: "snap"; id: number; rev: number | null };
+function parseSide(v: string | null): Side | null {
+  if (!v) return null;
+  if (v === "live") return { kind: "live" };
+  const [id, rev] = v.split(":").map(Number);
+  return Number.isInteger(id) && id > 0 ? { kind: "snap", id, rev: Number.isInteger(rev) && rev > 0 ? rev : null } : null;
+}
+const sideKey = (s: Side) => (s.kind === "live" ? "live" : `${s.id}${s.rev ? `:${s.rev}` : ""}`);
 
 export function PlanApp({ me }: { me: Me }) {
   const params = useSearchParams();
   const router = useRouter();
-  const mode = (params.get("view") as Mode) || "gantt";
+  // התצוגה: מהכתובת; אם לא צוינה — התצוגה האחרונה שבה המשתמש עבד (נשמרת אישית)
+  const initialMode = useRef<Mode>(currentPrefs(me.preferences).lastMode ?? "gantt");
+  const vp = params.get("view") as Mode | null;
+  const mode: Mode = vp && MODES.includes(vp) ? vp : initialMode.current;
+  useEffect(() => {
+    if (currentPrefs(me.preferences).lastMode !== mode) savePrefs({ lastMode: mode });
+  }, [mode, me.preferences]);
+
   const snapId = params.get("snap") ? Number(params.get("snap")) : null; // צפייה ב-Snapshot
   const snapRev = params.get("rev") ? Number(params.get("rev")) : null;
-  const baseId = params.get("base") ? Number(params.get("base")) : null; // Baseline להשוואה
-  const baseRev = params.get("brev") ? Number(params.get("brev")) : null;
+  // השוואה: שני צדדים. תאימות לאחור: base/brev = Snapshot מול המצב הנוכחי
+  const legacyBase = params.get("base") ? `${params.get("base")}${params.get("brev") ? `:${params.get("brev")}` : ""}` : null;
+  const sideA = parseSide(params.get("a") ?? legacyBase);
+  const sideB = parseSide(params.get("b")) ?? { kind: "live" as const };
   const [compareFilter, setCompareFilter] = useState("all");
 
   const setParams = useCallback((patch: Record<string, string | null>) => {
@@ -41,45 +64,66 @@ export function PlanApp({ me }: { me: Me }) {
   const snapshots = useQuery({ queryKey: ["snapshots"], queryFn: () => api<SnapshotMeta[]>("GET", "/api/snapshots") });
   const snapQ = useQuery({
     queryKey: ["snapshot", snapId, snapRev],
-    queryFn: () => api<{ data: PlanData; revision: { revisionNo: number; createdAt: string } }>("GET", `/api/snapshots/${snapId}${snapRev ? `?rev=${snapRev}` : ""}`),
-    enabled: !!snapId,
+    queryFn: () => api<SnapResp>("GET", `/api/snapshots/${snapId}${snapRev ? `?rev=${snapRev}` : ""}`),
+    enabled: !!snapId && mode !== "compare",
     staleTime: Infinity,
   });
-  const baseQ = useQuery({
-    queryKey: ["snapshot", baseId, baseRev],
-    queryFn: () => api<{ data: PlanData; revision: { revisionNo: number } }>("GET", `/api/snapshots/${baseId}${baseRev ? `?rev=${baseRev}` : ""}`),
-    enabled: mode === "compare" && !!baseId,
+  const sideQuery = (s: Side | null) => ({
+    queryKey: ["snapshot", s?.kind === "snap" ? s.id : null, s?.kind === "snap" ? s.rev : null],
+    queryFn: () => api<SnapResp>("GET", `/api/snapshots/${(s as { id: number }).id}${(s as { rev: number | null }).rev ? `?rev=${(s as { rev: number }).rev}` : ""}`),
+    enabled: mode === "compare" && s?.kind === "snap",
     staleTime: Infinity,
   });
+  const aQ = useQuery(sideQuery(sideA));
+  const bQ = useQuery(sideQuery(sideB));
 
-  // מצב השוואה הוא קריאה בלבד לכל המשתמשים — גם חלונית התכולה ו-Ctrl+Z לא יכולים לשנות נתונים
+  // סדר הצדדים לפי תאריך: המוקדם = תכנון, המאוחר = ביצוע. המצב הנוכחי = היום.
+  const today = todayIL();
+  const sideInfo = (s: Side, q: typeof aQ) => {
+    if (s.kind === "live") return { data: live.data, date: today, label: "מצב נוכחי", created: "9999", error: live.error };
+    const meta = snapshots.data?.find((x) => x.id === s.id);
+    return {
+      data: q.data?.data, date: meta?.asOfDate ?? today, created: meta?.createdAt ?? "",
+      label: `${meta?.name ?? `Snapshot #${s.id}`}${s.rev && q.data ? ` (גרסה ${q.data.revision.revisionNo})` : ""}`,
+      error: q.error ? (q.error as Error).message : null,
+    };
+  };
+  const cmp = useMemo(() => {
+    if (mode !== "compare" || !sideA) return null;
+    const A = sideInfo(sideA, aQ), B = sideInfo(sideB, bQ);
+    const aFirst = A.date < B.date || (A.date === B.date && A.created <= B.created);
+    return aFirst ? { plan: A, actual: B } : { plan: B, actual: A };
+  }, [mode, sideA && sideKey(sideA), sideKey(sideB), aQ.data, bQ.data, aQ.error, bQ.error, live.data, snapshots.data, today]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // מצב השוואה הוא קריאה בלבד לכל המשתמשים — גם חלונית התכולה ו-Ctrl+Z לא יכולים לשנות נתונים.
+  // חלונית התכולה מציגה את צד ה"ביצוע" של ההשוואה.
   const store: PlanStore = useMemo(() => (mode === "compare"
-    ? readOnlyStore(me, live.data, live.loading, live.error)
+    ? readOnlyStore(me, cmp?.actual.data ?? live.data, live.loading, live.error)
     : snapId
       ? readOnlyStore(me, snapQ.data?.data, snapQ.isLoading, snapQ.error ? (snapQ.error as Error).message : null)
-      : live), [snapId, mode, me, snapQ.data, snapQ.isLoading, snapQ.error, live]);
+      : live), [snapId, mode, me, snapQ.data, snapQ.isLoading, snapQ.error, live, cmp]);
 
-  // ---------- הגדרות תצוגה (אישיות) ----------
-  const [view, setViewState] = useState<ViewConfig>(() => defaultViewConfig(currentPrefs(me.preferences)));
+  // ---------- הגדרות תצוגה (אישיות, נשמרות בשרת לכל משתמש) ----------
+  const [view, setViewState] = useState<ViewConfig>(() => {
+    const prefs = currentPrefs(me.preferences);
+    const base = defaultViewConfig(prefs);
+    return prefs.lastView ? sanitizeView(prefs.lastView, base) : base;
+  });
   const viewsQ = useQuery({ queryKey: ["views"], queryFn: () => api<SavedView[]>("GET", "/api/views") });
   const appliedDefault = useRef(false);
   useEffect(() => {
     if (appliedDefault.current || !viewsQ.data) return;
     appliedDefault.current = true;
-    const d = viewsQ.data.find((v) => v.isDefault);
+    const d = viewsQ.data.find((v) => v.isDefault); // תצוגת ברירת מחדל שהמשתמש בחר גוברת על המצב האחרון
     if (d) setViewState((cur) => sanitizeView(d.config, cur, live.data));
-  }, [viewsQ.data, me.preferences]);
+  }, [viewsQ.data, live.data]);
   const prefTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setView = useCallback((v: ViewConfig) => {
-    setViewState((prev) => {
-      if (prev.showMilestones !== v.showMilestones || prev.showSprints !== v.showSprints || prev.density !== v.density) {
-        if (prefTimer.current) clearTimeout(prefTimer.current);
-        prefTimer.current = setTimeout(() => {
-          savePrefs({ showMilestones: v.showMilestones, showSprints: v.showSprints, density: v.density });
-        }, 400);
-      }
-      return v;
-    });
+    setViewState(v);
+    if (prefTimer.current) clearTimeout(prefTimer.current);
+    prefTimer.current = setTimeout(() => {
+      savePrefs({ lastView: v, showMilestones: v.showMilestones, showSprints: v.showSprints, density: v.density });
+    }, 600);
   }, []);
 
   // ---------- קיצורי מקלדת ----------
@@ -98,37 +142,22 @@ export function PlanApp({ me }: { me: Me }) {
   const goToday = () => (mode === "compare" ? compareRef.current?.goToday() : ganttRef.current?.goToday());
 
   const snapMeta = snapshots.data?.find((s) => s.id === snapId);
-  const baseMeta = snapshots.data?.find((s) => s.id === baseId);
   const data = store.data;
+  const cmpError = cmp?.plan.error ?? cmp?.actual.error ?? null;
 
   return (
     <WorkspaceUIProvider store={store} me={me}>
-      <div className="flex h-screen w-full flex-col overflow-hidden">
-        <TopBar me={me} active="plan">
-          <div className="flex items-center rounded-lg bg-ink-100 p-0.5" role="tablist">
-            {([
-              { m: "gantt", l: "גאנט", i: <GanttChart size={14} /> },
-              { m: "table", l: "תכולות", i: <Table2 size={14} /> },
-              { m: "compare", l: "תכנון מול ביצוע", i: <GitCompareArrows size={14} /> },
-            ] as const).map((t) => (
-              <button key={t.m} role="tab" aria-selected={mode === t.m} data-testid={`mode-${t.m}`}
-                onClick={() => setParams({ view: t.m === "gantt" ? null : t.m })}
-                className={clsx("flex items-center gap-1.5 rounded-md px-3 py-1 text-[13px] font-medium transition",
-                  mode === t.m ? "bg-white text-ink-900 shadow-sm" : "text-ink-500 hover:text-ink-900")}>
-                {t.i}{t.l}
-              </button>
-            ))}
-          </div>
+      <AppShell me={me} active={mode}>
+        <TopBar me={me}>
           {mode !== "compare" && (
             <SourceSelect snapshots={snapshots.data ?? []} value={snapId} onChange={(id) => setParams({ snap: id ? String(id) : null, rev: null })} />
           )}
           {mode === "compare" && (
-            <BaselineSelect snapshots={snapshots.data ?? []} value={baseId} onChange={(id) => setParams({ base: id ? String(id) : null, brev: null })} />
+            <CompareSidesSelect snapshots={snapshots.data ?? []} a={sideA} b={sideB}
+              onChange={(a, b) => setParams({ a: a ? sideKey(a) : null, b: sideKey(b), base: null, brev: null })} />
           )}
           <div className="mr-auto flex items-center gap-2">
-            {mode !== "compare" && !snapId && (
-              <AddButton store={store} />
-            )}
+            {mode !== "compare" && !snapId && <AddButton store={store} />}
             {me.role === "SUPER" && !snapId && mode !== "compare" && <SaveSnapshotButton />}
           </div>
         </TopBar>
@@ -136,7 +165,7 @@ export function PlanApp({ me }: { me: Me }) {
         {snapId && mode !== "compare" && (
           <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-[12.5px] text-amber-900" data-testid="snapshot-banner">
             <Eye size={14} />
-            <span>צופה ב-Snapshot <b>{snapMeta?.name ?? `#${snapId}`}</b>{snapQ.data ? ` · גרסה ${snapQ.data.revision.revisionNo}` : ""} · לקריאה בלבד</span>
+            <span>צופה ב-Snapshot <b>{snapMeta?.name ?? `#${snapId}`}</b>{snapMeta ? ` (${fmtDate(snapMeta.asOfDate)})` : ""}{snapQ.data ? ` · גרסה ${snapQ.data.revision.revisionNo}` : ""} · לקריאה בלבד</span>
             <button className="btn-ghost btn-sm mr-auto text-amber-900 hover:bg-amber-100" onClick={() => setParams({ snap: null, rev: null })}>חזרה למצב הנוכחי</button>
           </div>
         )}
@@ -144,34 +173,37 @@ export function PlanApp({ me }: { me: Me }) {
         {data && <FilterBar data={data} view={view} setView={setView} onToday={goToday} mode={mode} />}
 
         <main className="relative min-h-0 flex-1">
-          {store.loading && <Center><Loader2 className="animate-spin text-ink-400" /></Center>}
-          {store.error && <Center><div className="flex items-center gap-2 text-red-600"><AlertCircle size={16} />{store.error}</div></Center>}
+          {mode !== "compare" && store.loading && <Center><Loader2 className="animate-spin text-ink-400" /></Center>}
+          {mode !== "compare" && store.error && <Center><div className="flex items-center gap-2 text-red-600"><AlertCircle size={16} />{store.error}</div></Center>}
           {data && mode === "gantt" && <GanttView ref={ganttRef} store={store} view={view} />}
           {data && mode === "table" && <TableView store={store} view={view} me={me} />}
-          {mode === "compare" && live.data && (
-            !baseId ? (
+          {mode === "compare" && (
+            !sideA ? (
               <Center>
                 <div className="max-w-md text-center">
                   <GitCompareArrows className="mx-auto mb-3 text-ink-300" size={36} />
                   <div className="text-[15px] font-semibold">תכנון מול ביצוע</div>
-                  <p className="mt-1 text-ink-500">בחר Snapshot שישמש כ-Baseline. המערכת תשווה בין התכנון שנשמר בו לבין המצב הנוכחי, לפי ID של כל תכולה.</p>
+                  <p className="mt-1 text-ink-500">בחר תמונת מצב להשוואה מול המצב הנוכחי. המצב בעל התאריך המוקדם יותר ישמש כתכנון, והמאוחר כביצוע. ההתאמה היא לפי ID של כל תכולה.</p>
                   {(snapshots.data?.length ?? 0) === 0 && <p className="mt-3 text-[12px] text-ink-400">עדיין לא נשמרו תמונות מצב.</p>}
                   <div className="mt-4 flex flex-wrap justify-center gap-2">
-                    {snapshots.data?.slice(0, 6).map((s) => (
-                      <button key={s.id} className="btn-secondary" onClick={() => setParams({ base: String(s.id) })}>{s.name}</button>
+                    {snapshots.data?.slice(0, 8).map((s) => (
+                      <button key={s.id} className="btn-secondary" onClick={() => setParams({ a: String(s.id), b: sideKey(sideB) })}>
+                        {s.name} <span className="text-ink-400">· {fmtDate(s.asOfDate)}</span>
+                      </button>
                     ))}
                   </div>
                 </div>
               </Center>
-            ) : baseQ.data ? (
-              <CompareView ref={compareRef} current={live.data} baseline={baseQ.data.data} view={view}
-                filterKey={compareFilter} onFilterKey={setCompareFilter} baselineLabel={baseMeta?.name ?? "Snapshot"} />
-            ) : baseQ.error ? <Center><span className="text-red-600">{(baseQ.error as Error).message}</span></Center>
-              : <Center><Loader2 className="animate-spin text-ink-400" /></Center>
+            ) : cmpError ? <Center><span className="text-red-600">{cmpError}</span></Center>
+              : cmp?.plan.data && cmp.actual.data ? (
+                <CompareView ref={compareRef} current={cmp.actual.data} baseline={cmp.plan.data} view={view}
+                  filterKey={compareFilter} onFilterKey={setCompareFilter}
+                  planLabel={`${cmp.plan.label} · ${fmtDate(cmp.plan.date)}`} actualLabel={`${cmp.actual.label} · ${fmtDate(cmp.actual.date)}`} />
+              ) : <Center><Loader2 className="animate-spin text-ink-400" /></Center>
           )}
         </main>
         {mode !== "table" && <Legend readOnly={store.readOnly || mode === "compare"} />}
-      </div>
+      </AppShell>
     </WorkspaceUIProvider>
   );
 }
@@ -204,21 +236,39 @@ function SourceSelect({ snapshots, value, onChange }: { snapshots: SnapshotMeta[
       onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} data-testid="source-select" aria-label="מקור נתונים">
       <option value="">מצב נוכחי</option>
       {snapshots.length > 0 && <optgroup label="תמונות מצב שמורות">
-        {snapshots.map((s) => <option key={s.id} value={s.id}>📷 {s.name}</option>)}
+        {snapshots.map((s) => <option key={s.id} value={s.id}>📷 {s.name} · {fmtDate(s.asOfDate)}</option>)}
       </optgroup>}
     </select>
   );
 }
 
-function BaselineSelect({ snapshots, value, onChange }: { snapshots: SnapshotMeta[]; value: number | null; onChange: (id: number | null) => void }) {
+/** בחירת שני המצבים להשוואה. הסדר (תכנון/ביצוע) נקבע אוטומטית לפי תאריך כל מצב. */
+function CompareSidesSelect({ snapshots, a, b, onChange }: {
+  snapshots: SnapshotMeta[]; a: Side | null; b: Side; onChange: (a: Side | null, b: Side) => void;
+}) {
+  const opts = (
+    <>
+      <option value="live">מצב נוכחי · היום</option>
+      {snapshots.length > 0 && <optgroup label="תמונות מצב">
+        {snapshots.map((s) => <option key={s.id} value={String(s.id)}>{s.name} · {fmtDate(s.asOfDate)}</option>)}
+      </optgroup>}
+    </>
+  );
+  // גרסה מסוימת (מקישור ממסך תמונות המצב) מוצגת כ-Snapshot עצמו בבחירה
+  const val = (s: Side | null) => (!s ? "" : s.kind === "live" ? "live" : String(s.id));
+  const pick = (v: string): Side | null => (v === "" ? null : v === "live" ? { kind: "live" } : { kind: "snap", id: Number(v), rev: null });
   return (
-    <label className="flex items-center gap-1.5 text-[12.5px] text-ink-500">
-      Baseline:
-      <select className="input h-8 w-auto max-w-[260px] text-[12.5px]" value={value ?? ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} data-testid="baseline-select">
-        <option value="">בחר Snapshot…</option>
-        {snapshots.map((s) => <option key={s.id} value={s.id}>{s.name} ({fmtTs(s.createdAt).split(",")[0]})</option>)}
+    <div className="flex items-center gap-1.5 text-[12.5px] text-ink-500">
+      <span>השוואה בין</span>
+      <select className="input h-8 w-auto max-w-[240px] text-[12.5px]" value={val(a)} onChange={(e) => onChange(pick(e.target.value), b)} data-testid="compare-side-a" aria-label="מצב ראשון להשוואה">
+        <option value="">בחר תמונת מצב…</option>
+        {opts}
       </select>
-    </label>
+      <span>לבין</span>
+      <select className="input h-8 w-auto max-w-[240px] text-[12.5px]" value={val(b)} onChange={(e) => onChange(a, pick(e.target.value) ?? { kind: "live" })} data-testid="compare-side-b" aria-label="מצב שני להשוואה">
+        {opts}
+      </select>
+    </div>
   );
 }
 
@@ -240,17 +290,19 @@ function SaveSnapshotButton() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
+  const [asOf, setAsOf] = useState(todayIL());
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   const qc = useQueryClient();
   const submit = async () => {
     if (!name.trim()) { toast.show("error", "יש להזין שם ל-Snapshot"); return; }
+    if (!isISODate(asOf)) { toast.show("error", "תאריך לא תקין"); return; }
     setBusy(true);
     try {
-      await api("POST", "/api/snapshots", { name: name.trim(), description: desc });
+      await api("POST", "/api/snapshots", { name: name.trim(), description: desc, asOfDate: asOf });
       toast.show("success", `תמונת המצב "${name.trim()}" נשמרה`);
       qc.invalidateQueries({ queryKey: ["snapshots"] });
-      setOpen(false); setName(""); setDesc("");
+      setOpen(false); setName(""); setDesc(""); setAsOf(todayIL());
     } catch (e) { toast.show("error", (e as Error).message); }
     setBusy(false);
   };
@@ -262,6 +314,11 @@ function SaveSnapshotButton() {
         <div className="space-y-3">
           <p className="text-[12.5px] text-ink-500">יישמר עותק מלא של מצב התוכנית הנוכחי: תכולות, שורות, אבני דרך, ספרינטים, מידע רוחבי ומבנה התחומים. התוכנית הנוכחית לא תשתנה.</p>
           <div><label className="label">שם *</label><input className="input" data-autofocus value={name} onChange={(e) => setName(e.target.value)} placeholder="לדוגמה: Q4 2026 — תוכנית מאושרת" onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} data-testid="snapshot-name" /></div>
+          <div>
+            <label className="label">תאריך המצב</label>
+            <input type="date" className="input" value={asOf} onChange={(e) => setAsOf(e.target.value)} data-testid="snapshot-date" />
+            <p className="mt-1 text-[11.5px] text-ink-400">בהשוואת תכנון מול ביצוע, המצב בעל התאריך המוקדם יותר משמש כתכנון. ניתן לשנות מאוחר יותר.</p>
+          </div>
           <div><label className="label">תיאור</label><textarea className="input min-h-[70px]" value={desc} onChange={(e) => setDesc(e.target.value)} /></div>
         </div>
       </Dialog>

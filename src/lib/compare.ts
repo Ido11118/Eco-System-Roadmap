@@ -1,4 +1,4 @@
-// השוואת תכנון (Snapshot) מול מצב נוכחי — לוגיקה טהורה, ללא תלות ב-UI או בבסיס הנתונים.
+// השוואת תכנון (המצב המוקדם) מול ביצוע (המצב המאוחר) — לוגיקה טהורה, ללא תלות ב-UI או בבסיס הנתונים.
 // ההתאמה מתבצעת אך ורק לפי ID קבוע של תכולה.
 import { COMPLETED_STATUSES, type Status } from "./constants";
 import type { ItemDTO, PlanData, RowDTO } from "./types";
@@ -47,11 +47,11 @@ function plural(n: number) {
 
 export function describeUnit(u: Omit<CompareUnit, "description">): string {
   const t = new Set(u.tags);
-  if (t.has("deleted")) return "התכולה נמחקה מהתוכנית הנוכחית לאחר ה-Snapshot.";
+  if (t.has("deleted")) return "התכולה נמחקה לאחר מועד התכנון.";
   if (t.has("added")) {
     return t.has("completedUnplanned")
-      ? "התכולה נוספה לאחר ה-Snapshot והושלמה (לא הייתה בתכנון)."
-      : "התכולה נוספה לאחר ה-Snapshot.";
+      ? "התכולה נוספה לאחר מועד התכנון והושלמה (לא הייתה בתכנון)."
+      : "התכולה נוספה לאחר מועד התכנון.";
   }
   const parts: string[] = [];
   const sd = u.startDelta ?? 0, ed = u.endDelta ?? 0, dd = u.durationDelta ?? 0;
@@ -172,6 +172,20 @@ export function unitSegments(u: Pick<CompareUnit, "plan" | "actual">): Seg[] {
   return mergeSegments(segs);
 }
 
+/**
+ * התפוסה של יחידה בפריסה: כל הטווח מתחילת המוקדם מבין התכנון/הביצוע ועד סוף המאוחר — כולל הרווח ביניהם.
+ * כך תכולה אחרת לעולם לא תשב בין התכנון לביצוע של אותה תכולה, וברור מה שייך למה.
+ */
+export function unitSpan(u: Pick<CompareUnit, "plan" | "actual">): Seg[] {
+  const segs = unitSegments(u);
+  return segs.length ? [[segs[0][0], segs[segs.length - 1][1]]] : [];
+}
+
+/** האם טווח הזמן השתנה בין התכנון לביצוע (רק תאריכים — שינוי סטטוס/שם לא נחשב) */
+export function datesChanged(u: Pick<CompareUnit, "plan" | "actual">): boolean {
+  return !!u.plan && !!u.actual && (u.plan.start !== u.actual.start || u.plan.end !== u.actual.end);
+}
+
 export type Lane<T> = { rowId: number; laneIndex: number; units: T[] };
 
 /**
@@ -181,6 +195,7 @@ export type Lane<T> = { rowId: number; laneIndex: number; units: T[] };
  * 2. אין חפיפה בין יחידות שונות באותה שורה וירטואלית.
  * 3. כל יחידה נשארת בקבוצת השורה המקורית שלה (העדפת השורות המקוריות; סדר יציב).
  * 4. מספר מינימלי של שורות: הקצאה חמדנית לפי זמן התחלה (First-Fit), הנותנת פתרון אופטימלי למקטע יחיד.
+ *    בהשוואה, התפוסה של כל יחידה היא כל הטווח מתכנון עד ביצוע (unitSpan) — מקטע יחיד.
  */
 export function layoutLanes<T>(
   units: T[],
@@ -269,7 +284,7 @@ export function buildCompareLayout(baseline: PlanData, current: PlanData, filter
       ? rowOrderFor(Number(rest), "TEAM", current.rows, baseline.rows)
       : rowOrderFor(null, rest as RowDTO["kind"], current.rows, baseline.rows);
     rowsByGroup.set(k, order);
-    lanes.set(k, layoutLanes(groups.get(k) ?? [], order, (u) => u.rowId, unitSegments, (u) => u.id));
+    lanes.set(k, layoutLanes(groups.get(k) ?? [], order, (u) => u.rowId, unitSpan, (u) => u.id));
   }
   return { units, lanes, rowsByGroup };
 }
@@ -344,7 +359,7 @@ export const TAG_LABELS: Record<ChangeTag, string> = {
   advanced: "הוקדם",
   extended: "התארך",
   shortened: "התקצר",
-  added: "נוסף לאחר ה-Snapshot",
+  added: "נוסף אחרי התכנון",
   deleted: "נמחק",
   cancelled: "בוטל",
   completed: "הושלם",

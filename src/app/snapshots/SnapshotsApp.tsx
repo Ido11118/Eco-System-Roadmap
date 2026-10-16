@@ -6,9 +6,11 @@ import { Camera, Eye, GitCompareArrows, Pencil, Trash2, History, RotateCcw, Chev
 import type { Me, SnapshotMeta } from "@/lib/types";
 import { api } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
+import { AppShell } from "@/components/AppShell";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm, Dialog } from "@/components/ui/dialog";
 import { fmtTs } from "@/components/plan/ui";
+import { fmtDate } from "@/lib/weeks";
 
 type Rev = { id: number; revisionNo: number; note: string; createdAt: string; createdBy: string | null; items: number };
 
@@ -16,8 +18,8 @@ export function SnapshotsApp({ me }: { me: Me }) {
   const q = useQuery({ queryKey: ["snapshots"], queryFn: () => api<SnapshotMeta[]>("GET", "/api/snapshots") });
   const isSuper = me.role === "SUPER";
   return (
-    <div className="flex h-screen w-full flex-col overflow-hidden">
-      <TopBar me={me} active="snapshots" />
+    <AppShell me={me} active="snapshots">
+      <TopBar me={me}><span className="text-[14px] font-semibold text-ink-900">תמונות מצב</span></TopBar>
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-[1000px] px-6 py-6">
           <h1 className="text-[20px] font-bold">תמונות מצב (Snapshots)</h1>
@@ -38,14 +40,14 @@ export function SnapshotsApp({ me }: { me: Me }) {
           </div>
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }
 
 function SnapshotCard({ s, isSuper }: { s: SnapshotMeta; isSuper: boolean }) {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState(false);
-  const [f, setF] = useState({ name: s.name, description: s.description });
+  const [f, setF] = useState({ name: s.name, description: s.description, asOfDate: s.asOfDate });
   const qc = useQueryClient();
   const toast = useToast();
   const confirm = useConfirm();
@@ -58,6 +60,7 @@ function SnapshotCard({ s, isSuper }: { s: SnapshotMeta; isSuper: boolean }) {
           <div className="flex items-center gap-2">
             <Camera size={15} className="text-ink-400" />
             <span className="text-[14px] font-semibold">{s.name}</span>
+            <span className="rounded bg-brand-50 px-1.5 py-0.5 text-[11px] font-medium text-brand-700" title="תאריך המצב — קובע את הסדר בהשוואת תכנון מול ביצוע">{fmtDate(s.asOfDate)}</span>
             <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[11px] text-ink-500">גרסה {s.currentRevisionNo}{s.revisionCount > 1 ? ` מתוך ${s.revisionCount}` : ""}</span>
           </div>
           {s.description && <p className="mt-1 text-[12.5px] text-ink-700">{s.description}</p>}
@@ -65,9 +68,9 @@ function SnapshotCard({ s, isSuper }: { s: SnapshotMeta; isSuper: boolean }) {
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <Link className="btn-secondary btn-sm" href={`/plan?snap=${s.id}`}><Eye size={13} />צפייה</Link>
-          <Link className="btn-secondary btn-sm" href={`/plan?view=compare&base=${s.id}`}><GitCompareArrows size={13} />השוואה למצב הנוכחי</Link>
+          <Link className="btn-secondary btn-sm" href={`/plan?view=compare&a=${s.id}&b=live`}><GitCompareArrows size={13} />השוואה למצב הנוכחי</Link>
           {isSuper && <Link className="btn-secondary btn-sm" href={`/snapshots/${s.id}/edit`} data-testid="edit-snapshot"><Pencil size={13} />עריכת תוכן</Link>}
-          {isSuper && <button className="icon-btn" title="שינוי שם ותיאור" onClick={() => setEdit(true)}><Pencil size={13} /></button>}
+          {isSuper && <button className="icon-btn" title="שינוי שם, תאריך ותיאור" onClick={() => { setF({ name: s.name, description: s.description, asOfDate: s.asOfDate }); setEdit(true); }}><Pencil size={13} /></button>}
           {isSuper && <button className="icon-btn hover:text-red-600" title="מחיקה" onClick={async () => {
             if (await confirm({ title: "מחיקת Snapshot", text: `למחוק את "${s.name}"? לא ניתן יהיה להשתמש בו להשוואה.`, confirm: "מחיקה", danger: true })) {
               try { await api("DELETE", `/api/snapshots/${s.id}`); refresh(); toast.show("success", "נמחק"); } catch (e) { toast.show("error", (e as Error).message); }
@@ -89,7 +92,7 @@ function SnapshotCard({ s, isSuper }: { s: SnapshotMeta; isSuper: boolean }) {
                   <td className="px-3 tabular-nums">{r.items}</td>
                   <td className="px-3 text-left">
                     <Link className="btn-ghost btn-sm" href={`/plan?snap=${s.id}&rev=${r.id}`}>צפייה</Link>
-                    <Link className="btn-ghost btn-sm" href={`/plan?view=compare&base=${s.id}&brev=${r.id}`}>השוואה</Link>
+                    <Link className="btn-ghost btn-sm" href={`/plan?view=compare&a=${s.id}:${r.id}&b=live`}>השוואה</Link>
                     {isSuper && r.id !== s.currentRevisionId && (
                       <button className="btn-ghost btn-sm" data-testid={`restore-${r.revisionNo}`} onClick={async () => {
                         if (await confirm({ title: "שחזור גרסה", text: `לשחזר את גרסה ${r.revisionNo}? תיווצר גרסה חדשה עם תוכן זה; ההיסטוריה נשמרת.`, confirm: "שחזור" })) {
@@ -110,6 +113,11 @@ function SnapshotCard({ s, isSuper }: { s: SnapshotMeta; isSuper: boolean }) {
         }}>שמירה</button><button className="btn-secondary" onClick={() => setEdit(false)}>ביטול</button></>}>
         <div className="space-y-3">
           <div><label className="label">שם</label><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
+          <div>
+            <label className="label">תאריך המצב</label>
+            <input type="date" className="input" value={f.asOfDate} onChange={(e) => setF({ ...f, asOfDate: e.target.value })} data-testid="snapshot-date-edit" />
+            <p className="mt-1 text-[11.5px] text-ink-400">בהשוואת תכנון מול ביצוע, המצב בעל התאריך המוקדם יותר משמש כתכנון.</p>
+          </div>
           <div><label className="label">תיאור</label><textarea className="input min-h-[70px]" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></div>
         </div>
       </Dialog>
