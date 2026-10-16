@@ -4,7 +4,7 @@
 import { api } from "@/lib/api";
 import { useEffect, useState } from "react";
 import type { UserPreferences, ViewConfig, PlanData, TextSize } from "@/lib/types";
-import { defaultViewConfig } from "./filters";
+import { CROSS_FILTER_IDS, defaultViewConfig } from "./filters";
 
 let cache: UserPreferences | null = null;
 
@@ -54,8 +54,11 @@ export function sanitizeView(cfg: Partial<ViewConfig>, current: ViewConfig, data
     showMilestones: current.showMilestones, showSprints: current.showSprints, density: current.density,
     ...cfg,
   };
+  // תצוגות שנשמרו לפני שהשורות הרוחביות נכנסו לסינון התחומים: מי שסינן תחומים המשיך לראות אותן — שומרים על כך
+  if (cfg.v !== 2 && v.domainIds?.length) v.domainIds = [...v.domainIds, ...CROSS_FILTER_IDS];
+  v.v = 2;
   if (data) {
-    const d = new Set(data.domains.map((x) => x.id)), t = new Set(data.teams.map((x) => x.id));
+    const d = new Set([...data.domains.map((x) => x.id), ...CROSS_FILTER_IDS]), t = new Set(data.teams.map((x) => x.id));
     v.domainIds = (v.domainIds ?? []).filter((x) => d.has(x));
     v.teamIds = (v.teamIds ?? []).filter((x) => t.has(x));
   }

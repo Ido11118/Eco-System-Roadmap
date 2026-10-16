@@ -1005,6 +1005,59 @@ async function main() {
     assert(!(await pa.locator("[data-testid=banner-edit-snapshot]").count()), "regular user sees edit button on shared snapshot");
   });
 
+  // 46 --------------------------------------------------------------
+  await scenario(46, "טבלה: בלי תיבות סימון, Ctrl+לחיצה וקליק ימני (סטטוס לכמה, מחיקה עם הסבר שחזור); הרשמה: עין ו-V; צפייה בלבד; סינון שורות רוחביות", async () => {
+    const r = await newRow(A, T_AZ1);
+    const mk = async (n: string, w: number) => (await json<ItemDTO>(A, "POST", "/api/items", { rowId: r.id, name: `${n}-${RUN}`, startWeek: addWeeks(cw, w), endWeek: addWeeks(cw, w) })).body;
+    const i1 = await mk("טבלה1", 20), i2 = await mk("טבלה2", 21), i3 = await mk("טבלה3", 22);
+    await pa.goto(`${BASE}/plan?view=table`); await pa.waitForSelector(`[data-item-row="${i1.id}"]`);
+    assert(!(await pa.locator("[data-testid=table-view] input[type=checkbox]").count()), "checkbox column still present");
+    // Ctrl+לחיצה על שתי שורות → קליק ימני → שינוי סטטוס לשתיהן
+    const cellOf = (id: number) => pa.locator(`[data-item-row="${id}"] td`).nth(5);
+    await cellOf(i1.id).click({ modifiers: ["ControlOrMeta"] });
+    await cellOf(i2.id).click({ modifiers: ["ControlOrMeta"] });
+    await pa.waitForSelector("[data-testid=bulk-bar]");
+    assert((await pa.locator("[data-testid=bulk-bar]").innerText()).includes("2 נבחרו"), "multi-select failed");
+    await cellOf(i2.id).click({ button: "right" });
+    assert((await pa.locator("[data-testid=row-menu]").innerText()).includes("2 תכולות נבחרו"), "context menu not for selection");
+    await pa.click("[data-testid=row-menu] [data-status-option=BLOCKED]");
+    await pa.waitForTimeout(800);
+    const pl = (await json<PlanData>(A, "GET", "/api/plan")).body;
+    assert(pl.items.find((i) => i.id === i1.id)?.status === "BLOCKED" && pl.items.find((i) => i.id === i2.id)?.status === "BLOCKED", "bulk status via context menu failed");
+    await pa.keyboard.press("Escape");
+    // קליק ימני → מחיקה עם הסבר שחזור
+    await cellOf(i3.id).click({ button: "right" });
+    await pa.locator("[data-testid=row-menu]").getByText("מחיקת תכולה").click();
+    const dlg = pa.locator("div[role=dialog]");
+    await dlg.waitFor();
+    assert((await dlg.innerText()).includes("תכולות שנמחקו"), "delete confirm lacks restore hint");
+    await dlg.getByRole("button", { name: "מחיקה" }).click();
+    await pa.waitForTimeout(800);
+    assert(!(await json<PlanData>(A, "GET", "/api/plan")).body.items.some((i) => i.id === i3.id), "item not deleted");
+    // גאנט: "צפייה בלבד" בצוות בלי הרשאה; קליק ימני על "גורמים משפיעים" → הסתרה
+    await pa.goto(`${BASE}/plan?view=gantt`); await pa.waitForSelector("[data-cross=INFLUENCE]");
+    assert(await pa.getByText("צפייה בלבד").count() > 0, "view-only label missing");
+    assert(!(await pa.getByText("קריאה בלבד").count()), "old read-only label still shown");
+    await pa.locator("[data-cross=INFLUENCE] > div").first().click({ button: "right" });
+    await pa.getByText(/הסתרת השורה/).click();
+    await pa.waitForTimeout(300);
+    assert(!(await pa.locator("[data-cross=INFLUENCE]").count()), "influence row not hidden");
+    await pa.getByRole("button", { name: "ניקוי מסננים" }).click();
+    await pa.waitForSelector("[data-cross=INFLUENCE]");
+    // הרשמה: עין מציגה סיסמה; V כשהאימות תואם
+    const pr = await (await browser.newContext()).newPage();
+    await pr.goto(`${BASE}/register`);
+    await pr.fill("#password", "Secret-123"); await pr.fill("#password2", "Secret-12");
+    assert(!(await pr.locator("[data-testid=password2-match]").count()), "match icon shown for mismatch");
+    await pr.fill("#password2", "Secret-123");
+    await pr.waitForSelector("[data-testid=password2-match]");
+    assert((await pr.getAttribute("#password", "type")) === "password", "password visible by default");
+    await pr.click("[data-testid=password-eye]");
+    assert((await pr.getAttribute("#password", "type")) === "text", "eye did not reveal password");
+    assert((await pr.locator("form").innerText()).includes("לצפות בכל תוכנית העבודה"), "view-all note missing");
+    await pr.context().close();
+  });
+
   await browser.close();
   console.log("\n────────────────────────────────────────");
   const failed = results.filter((r) => !r.ok);

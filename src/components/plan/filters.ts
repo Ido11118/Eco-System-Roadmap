@@ -4,8 +4,16 @@ import {
   daysDiff, HEB_MONTHS, fmtDate, type ISODate,
 } from "@/lib/weeks";
 
+/** השורות הרוחביות כ"תחומים" בסינון התחומים בגאנט (מזהים שליליים — לא מתנגשים בתחומים אמיתיים) */
+export const CROSS_FILTER = { INFLUENCE: -1, CROSS_EVENT: -2 } as const;
+export const CROSS_FILTER_IDS: number[] = [CROSS_FILTER.INFLUENCE, CROSS_FILTER.CROSS_EVENT];
+export function crossRowVisible(v: ViewConfig, kind: "INFLUENCE" | "CROSS_EVENT") {
+  return v.domainIds.length === 0 || v.domainIds.includes(CROSS_FILTER[kind]);
+}
+
 export function defaultViewConfig(prefs?: { showMilestones?: boolean; showSprints?: boolean; density?: ViewConfig["density"] }): ViewConfig {
   return {
+    v: 2,
     domainIds: [], teamIds: [], statuses: [], priorities: [], search: "",
     time: { kind: "all" },
     showItems: true,
@@ -123,7 +131,7 @@ export function visibleTeamIds(data: PlanData, v: ViewConfig): Set<number> {
 
 /** הסתרת תחום מהתצוגה. null = לא ניתן (זה התחום האחרון שמוצג). */
 export function hideDomain(v: ViewConfig, data: PlanData, domainId: number): ViewConfig | null {
-  const shown = (v.domainIds.length ? v.domainIds : data.domains.map((d) => d.id)).filter((id) => id !== domainId);
+  const shown = (v.domainIds.length ? v.domainIds : [...data.domains.map((d) => d.id), ...CROSS_FILTER_IDS]).filter((id) => id !== domainId);
   if (!shown.length) return null;
   const teamsOfDomain = new Set(data.teams.filter((t) => t.domainId === domainId).map((t) => t.id));
   return { ...v, domainIds: shown, teamIds: v.teamIds.filter((t) => !teamsOfDomain.has(t)) };
@@ -143,11 +151,12 @@ export function hideTeam(v: ViewConfig, data: PlanData, teamId: number): ViewCon
 
 /** סינון ברירת מחדל לפי הרשאות: משתמש עם עריכה לתחומים מסוימים רואה בהתחלה רק אותם */
 export function permissionDefaultDomains(me: { role: string; domainIds: number[] }): number[] {
-  return me.role !== "SUPER" && me.domainIds.length ? [...me.domainIds] : [];
+  // כולל את השורות הרוחביות — שהחגים ושאר המידע הרוחבי לא ייעלמו
+  return me.role !== "SUPER" && me.domainIds.length ? [...me.domainIds, ...CROSS_FILTER_IDS] : [];
 }
 
 export type Revealable =
-  | { kind: "item"; teamId: number | null; status: string; priority: string; name: string; notes?: string; startWeek: ISODate; endWeek: ISODate }
+  | { kind: "item"; teamId: number | null; rowKind?: "TEAM" | "INFLUENCE" | "CROSS_EVENT"; status: string; priority: string; name: string; notes?: string; startWeek: ISODate; endWeek: ISODate }
   | { kind: "milestone"; teamId: number | null; date: ISODate }
   | { kind: "sprint"; domainId: number; startDate: ISODate; endDate: ISODate };
 
@@ -161,6 +170,9 @@ export function revealFor(v: ViewConfig, data: PlanData, x: Revealable): { view:
   const team = "teamId" in x && x.teamId !== null ? data.teams.find((t) => t.id === x.teamId) : undefined;
   const domainId = x.kind === "sprint" ? x.domainId : team?.domainId;
   if (domainId !== undefined && n.domainIds.length && !n.domainIds.includes(domainId)) { n.domainIds = [...n.domainIds, domainId]; changes.push("תחום"); }
+  // תכולה רוחבית / אבן דרך רוחבית — השורה הרוחבית צריכה להיות מוצגת
+  const crossKind = x.kind === "item" && x.rowKind && x.rowKind !== "TEAM" ? x.rowKind : x.kind === "milestone" && x.teamId === null ? "CROSS_EVENT" : null;
+  if (crossKind && n.domainIds.length && !n.domainIds.includes(CROSS_FILTER[crossKind])) { n.domainIds = [...n.domainIds, CROSS_FILTER[crossKind]]; changes.push("שורה רוחבית"); }
   if (team && n.teamIds.length && !n.teamIds.includes(team.id)) { n.teamIds = [...n.teamIds, team.id]; changes.push("צוות"); }
   if (x.kind === "sprint" && n.teamIds.length && !data.teams.some((t) => t.domainId === x.domainId && n.teamIds.includes(t.id))) {
     n.teamIds = [...n.teamIds, ...data.teams.filter((t) => t.domainId === x.domainId).map((t) => t.id)]; changes.push("צוות");

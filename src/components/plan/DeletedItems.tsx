@@ -11,6 +11,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { useCatalog } from "@/components/CatalogProvider";
 import { PLAN_KEY } from "./store";
+import { DELETED_RETENTION_DAYS } from "@/lib/constants";
 import { fmtTs, placeLabel } from "./ui";
 import type { PlanData } from "@/lib/types";
 
@@ -50,7 +51,7 @@ function DeletedItemsDialog({ data, onClose }: { data: PlanData; onClose: () => 
       footer={<button className="btn-secondary" onClick={onClose}>סגירה</button>}>
       <p className="mb-2 text-[12.5px] text-ink-500">
         שחזור מחזיר את התכולה <b>עם אותו ID</b>, כך שבתכנון מול ביצוע היא ממשיכה להיות מזוהה. אם נמחקה בטעות — עדיף לשחזר אותה מאשר ליצור מחדש
-        (יצירה מחדש מקבלת ID חדש ותופיע כ&quot;נמחקה&quot; + &quot;נוספה&quot;). מוצגות מחיקות מ-180 הימים האחרונים.
+        (יצירה מחדש מקבלת ID חדש ותופיע כ&quot;נמחקה&quot; + &quot;נוספה&quot;). מוצגות מחיקות מ-{DELETED_RETENTION_DAYS} הימים האחרונים, בתחומים שאתה מורשה לערוך.
       </p>
       <input className="input mb-2 h-8" placeholder="חיפוש לפי שם או ID…" value={q} onChange={(e) => setQ(e.target.value)} data-autofocus />
       {list.isLoading && <div className="py-6 text-center text-ink-400">טוען…</div>}

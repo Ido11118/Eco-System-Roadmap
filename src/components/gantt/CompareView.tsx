@@ -12,7 +12,7 @@ import {
 import { buildTimeline, fmtDate, weekEndOf, weekNumber, type ISODate } from "@/lib/weeks";
 import { useTooltip } from "@/components/ui/tooltip";
 import { useWorkspaceUI } from "@/components/plan/ui";
-import { itemMatches, timeWindow, visibleTeamIds } from "@/components/plan/filters";
+import { crossRowVisible, itemMatches, timeWindow, visibleTeamIds } from "@/components/plan/filters";
 import { GanttGrid, useCurrentWeek, type CrossGroup, type GanttGridHandle, type LaneSpec } from "./GanttGrid";
 import { geometry } from "./geometry";
 
@@ -71,7 +71,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
     }
     return m;
   }, [structure.teams, layout, rowH, laneUnits]);
-  const crossGroups: CrossGroup[] = useMemo(() => (["INFLUENCE", "CROSS_EVENT"] as const).map((kind) => {
+  const crossGroups: CrossGroup[] = useMemo(() => (["INFLUENCE", "CROSS_EVENT"] as const).filter((k) => crossRowVisible(view, k)).map((kind) => {
     const lanes = layout.lanes.get(`cross:${kind}`) ?? [];
     return {
       kind, label: kind === "INFLUENCE" ? "גורמים משפיעים" : "מופעים רוחביים", editable: false,
@@ -81,7 +81,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
         return { key, rowId: l.rowId, height: crossLaneH + 10, isRowStart: l.laneIndex === 0, rowIndex: i, virtual: l.laneIndex > 0, editable: false };
       }),
     };
-  }), [layout, crossLaneH, laneUnits]);
+  }), [layout, crossLaneH, laneUnits, view.domainIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const n = timeline.weeks.length;
   const box = (s: ISODate, e: ISODate) => {

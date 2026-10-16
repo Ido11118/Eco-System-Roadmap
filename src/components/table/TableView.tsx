@@ -2,7 +2,9 @@
 // תצוגת תכולות (Table View) — אותו מקור נתונים ואותן פעולות עדכון כמו הגאנט.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Layers, X, ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Layers, X, ChevronDown, ChevronsDownUp, ChevronsUpDown, Trash2 } from "lucide-react";
+import { useConfirm } from "@/components/ui/dialog";
+import { DELETED_RETENTION_DAYS } from "@/lib/constants";
 import type { ItemDTO, Me, ViewConfig } from "@/lib/types";
 import { useCatalog } from "@/components/CatalogProvider";
 import { fmtDate, weekEndOf, weekNumber, weekYear } from "@/lib/weeks";
@@ -30,7 +32,7 @@ const COLS: { key: ColKey; label: string; w: number; sticky?: boolean }[] = [
   { key: "updatedAt", label: "עדכון אחרון", w: 150 },
   { key: "id", label: "ID", w: 60 }, // הכי שמאלית — מידע טכני
 ];
-const CHECK_W = 36;
+const CHECK_W = 0; // אין עמודת תיבות סימון — בחירה מרובה ב-Ctrl/Shift + לחיצה
 
 type Row = { item: ItemDTO; domain: string; team: string; domainId: number; teamId: number; domainOrder: number; teamOrder: number; rowOrder: number; editable: boolean };
 
@@ -111,7 +113,39 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
     return () => window.removeEventListener("wp:locate", h);
   }, []);
   const selItems = sorted.filter((r) => selected.has(r.item.id) && r.editable).map((r) => r.item);
-  const allSelected = sorted.length > 0 && sorted.filter((r) => r.editable).every((r) => selected.has(r.item.id));
+  // בחירה מרובה: Ctrl/⌘+לחיצה מוסיף/מסיר שורה, Shift+לחיצה בוחר טווח. Escape מנקה.
+  const anchor = useRef<number | null>(null);
+  const onRowClick = (e: React.MouseEvent, r: Row) => {
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return;
+    e.preventDefault(); e.stopPropagation();
+    window.getSelection()?.removeAllRanges();
+    if (e.shiftKey && anchor.current !== null) {
+      const ids = sorted.map((x) => x.item.id);
+      const a = ids.indexOf(anchor.current), b = ids.indexOf(r.item.id);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelected(new Set(sorted.slice(lo, hi + 1).filter((x) => x.editable).map((x) => x.item.id)));
+        return;
+      }
+    }
+    anchor.current = r.item.id;
+    if (!r.editable) return;
+    setSelected((s) => { const n = new Set(s); if (n.has(r.item.id)) n.delete(r.item.id); else n.add(r.item.id); return n; });
+  };
+  useEffect(() => {
+    if (!selected.size) return;
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector("[role=dialog]")) setSelected(new Set()); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [selected.size]);
+  // קליק ימני על שורה: אם השורה בתוך הבחירה — הפעולה על כל הנבחרות; אחרת — על השורה בלבד
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; items: ItemDTO[]; one: Row } | null>(null);
+  const onRowMenu = (e: React.MouseEvent, r: Row) => {
+    if ((e.target as HTMLElement).closest("input, textarea, select")) return;
+    e.preventDefault();
+    const items = selected.has(r.item.id) && selItems.length > 1 ? selItems : [r.item];
+    setRowMenu({ x: e.clientX, y: e.clientY, items, one: r });
+  };
 
   const toggleSort = (k: ColKey) => setSort((s) => (!s || s.key !== k ? { key: k, dir: 1 } : s.dir === 1 ? { key: k, dir: -1 } : null));
 
@@ -138,6 +172,7 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
     <div className="flex h-full flex-col" data-testid="table-view">
       <div className="flex items-center gap-2 border-b border-ink-200 bg-white px-4 py-1.5 text-[12px]">
         <span className="text-ink-500">{sorted.length} תכולות</span>
+        {!selItems.length && <span className="text-[11.5px] text-ink-400">· קליק ימני על שורה לפעולות · <span className="kbd">Ctrl</span>+לחיצה לבחירה מרובה</span>}
         <button className={clsx("btn-ghost btn-sm", grouped && "bg-ink-100")} onClick={() => setGrouped((g) => !g)}><Layers size={13} />קיבוץ לפי תחום וצוות</button>
         {sort && <button className="btn-ghost btn-sm" onClick={() => setSort(null)}><X size={12} />ביטול מיון</button>}
         {selItems.length > 0 && (
@@ -158,15 +193,10 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
       <div className="min-h-0 flex-1 overflow-auto bg-white">
         <table className="border-separate border-spacing-0 text-[12.5px]" style={{ width: totalW, tableLayout: "fixed" }}>
           <colgroup>
-            <col style={{ width: CHECK_W }} />
             {COLS.map((c) => <col key={c.key} style={{ width: widths[c.key] }} />)}
           </colgroup>
           <thead className="sticky top-0 z-20">
             <tr>
-              <th className="sticky right-0 z-30 border-b border-l border-ink-200 bg-[var(--header)]" style={{ height: 34 }}>
-                <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={allSelected} aria-label="בחר הכל"
-                  onChange={(e) => setSelected(e.target.checked ? new Set(sorted.filter((r) => r.editable).map((r) => r.item.id)) : new Set())} />
-              </th>
               {COLS.map((c) => (
                 <th key={c.key} className={clsx("relative select-none border-b border-l border-ink-200 bg-[var(--header)] px-2 text-start font-semibold text-ink-700", c.sticky && "sticky z-30")}
                   style={{ right: stickyRight(c.key) }}>
@@ -181,7 +211,7 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
           </thead>
           <tbody>
             {sorted.length === 0 && (
-              <tr><td colSpan={COLS.length + 1} className="p-12 text-center text-ink-500">אין תכולות להצגה לפי הסינון הנוכחי</td></tr>
+              <tr><td colSpan={COLS.length} className="p-12 text-center text-ink-500">אין תכולות להצגה לפי הסינון הנוכחי</td></tr>
             )}
             {sorted.map((r) => {
               const g = `${r.domain} / ${r.team}`;
@@ -192,7 +222,7 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
               const isCollapsed = groupedOn && collapsed.has(r.teamId);
               const headerRow = header && (
                 <tr key={`g-${g}`} data-group={r.teamId}>
-                  <td colSpan={COLS.length + 1} className="border-b border-ink-200 bg-ink-50 p-0">
+                  <td colSpan={COLS.length} className="border-b border-ink-200 bg-ink-50 p-0">
                     <button className="sticky right-0 flex items-center gap-1.5 px-3 py-1.5 text-start text-[12px] font-bold text-ink-700 hover:text-ink-900"
                       onClick={() => toggleGroup(r.teamId)} aria-expanded={!isCollapsed} title={isCollapsed ? "הצגת התכולות" : "מזעור"}
                       onContextMenu={(e) => { e.preventDefault(); setGroupMenu({ x: e.clientX, y: e.clientY, domainId: r.domainId, teamId: r.teamId }); }}>
@@ -206,11 +236,8 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
               if (isCollapsed) return [headerRow];
               return [
                 headerRow,
-                <tr key={i.id} className={clsx("group hover:bg-brand-50/40", selected.has(i.id) && "bg-brand-50/60")} data-item-row={i.id}>
-                  <td className={clsx(cell, "sticky right-0 z-10 bg-white text-center group-hover:bg-[#f5f8ff]")} style={{ height: 34 }}>
-                    <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" disabled={!r.editable} checked={selected.has(i.id)} aria-label={`בחר ${i.name}`}
-                      onChange={(e) => setSelected((s) => { const n = new Set(s); if (e.target.checked) n.add(i.id); else n.delete(i.id); return n; })} />
-                  </td>
+                <tr key={i.id} className={clsx("group hover:bg-brand-50/40", selected.has(i.id) && "bg-brand-50/60 [&>td]:!bg-brand-50")} data-item-row={i.id}
+                  onClickCapture={(e) => onRowClick(e, r)} onContextMenu={(e) => onRowMenu(e, r)} style={{ height: 34 }}>
                   <td className={clsx(cell, "sticky z-10 truncate bg-white font-medium text-ink-700 group-hover:bg-[#f5f8ff]")} style={{ right: stickyRight("domain") }}>{r.domain}</td>
                   <td className={clsx(cell, "sticky z-10 truncate bg-white text-ink-700 group-hover:bg-[#f5f8ff]")} style={{ right: stickyRight("team") }}>{r.team}</td>
                   <td className={cell}><NameCell item={i} editable={r.editable} store={store} onOpen={() => ui.openItem(i.id)} /></td>
@@ -250,6 +277,9 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
           </tbody>
         </table>
       </div>
+      <Floating open={!!rowMenu} point={rowMenu ?? undefined} onClose={() => setRowMenu(null)}>
+        {rowMenu && <RowMenu menu={rowMenu} store={store} onOpen={(id) => ui.openItem(id)} onDone={() => { setRowMenu(null); }} onDeleted={() => setSelected(new Set())} />}
+      </Floating>
       <Floating open={!!groupMenu} point={groupMenu ?? undefined} onClose={() => setGroupMenu(null)}>
         {groupMenu && (
           <div className="w-[240px] p-1" onClick={() => setGroupMenu(null)} data-testid="group-menu">
@@ -264,6 +294,66 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
     </div>
   );
 });
+
+/** תפריט קליק ימני על שורה (או על כמה שורות נבחרות): סטטוס, תיעדוף, פרטים, מחיקה */
+function RowMenu({ menu, store, onOpen, onDone, onDeleted }: {
+  menu: { items: ItemDTO[]; one: Row }; store: PlanStore; onOpen: (id: number) => void; onDone: () => void; onDeleted: () => void;
+}) {
+  const cat = useCatalog();
+  const confirm = useConfirm();
+  const { items, one } = menu;
+  const multi = items.length > 1;
+  const editable = multi || one.editable;
+  const apply = (patch: { status?: string; priority?: string }) => {
+    onDone();
+    if (multi) void store.bulkUpdate(items, patch);
+    else void store.updateItem(items[0], patch);
+  };
+  return (
+    <div className="w-[250px] p-1" data-testid="row-menu">
+      <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-ink-500">{multi ? `${items.length} תכולות נבחרו` : one.item.name}</div>
+      {!multi && <MenuItem icon={<ExternalLink size={14} />} onClick={() => { onDone(); onOpen(one.item.id); }}>פתח פרטי תכולה</MenuItem>}
+      {editable ? (
+        <>
+          <div className="my-1 border-t border-ink-100" />
+          <div className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold text-ink-400">שינוי סטטוס</div>
+          <div className="grid grid-cols-2 gap-0.5 px-1">
+            {cat.statuses.map((st) => (
+              <button key={st.key} onClick={() => apply({ status: st.key })} data-status-option={st.key}
+                className={clsx("flex items-center gap-1.5 rounded px-1.5 py-1 text-start text-[12px] hover:bg-ink-100", !multi && one.item.status === st.key && "bg-ink-100 font-semibold")}>
+                <span className="h-2.5 w-2.5 shrink-0 rounded-sm border" style={{ background: st.bg, borderColor: st.border }} />
+                <span className="truncate">{st.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="my-1 border-t border-ink-100" />
+          <div className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold text-ink-400">שינוי תיעדוף</div>
+          <div className="flex flex-wrap gap-0.5 px-1">
+            {cat.priorities.map((p) => (
+              <button key={p.key} onClick={() => apply({ priority: p.key })} data-priority-option={p.key}
+                className={clsx("rounded px-2 py-1 text-[12px] font-medium hover:bg-ink-100", !multi && one.item.priority === p.key && "bg-ink-100")}
+                style={{ color: p.key === cat.defaultPriority ? "#64748b" : p.color }}>{p.label}</button>
+            ))}
+          </div>
+          <div className="my-1 border-t border-ink-100" />
+          <MenuItem danger icon={<Trash2 size={14} />} onClick={async () => {
+            onDone();
+            const ok = await confirm({
+              title: multi ? `מחיקת ${items.length} תכולות` : "מחיקת תכולה", danger: true, confirm: "מחיקה",
+              text: <>
+                {multi ? `האם אתה בטוח שברצונך למחוק ${items.length} תכולות?` : <>האם אתה בטוח שברצונך למחוק את &quot;{one.item.name}&quot;?</>}
+                <span className="mt-1.5 block text-[12px] text-ink-500">אם תרצה לשחזר, התכולה תהיה זמינה ב-{DELETED_RETENTION_DAYS} הימים הקרובים תחת &quot;תכולות שנמחקו&quot; (עם אותו ID).</span>
+              </>,
+            });
+            if (!ok) return;
+            for (const it of items) await store.deleteItem(it);
+            onDeleted();
+          }}>{multi ? `מחיקת ${items.length} תכולות` : "מחיקת תכולה"}</MenuItem>
+        </>
+      ) : <div className="px-2.5 py-1.5 text-[12px] text-ink-400">אין לך הרשאת עריכה לתחום זה — צפייה בלבד</div>}
+    </div>
+  );
+}
 
 function NameCell({ item, editable, store, onOpen }: { item: ItemDTO; editable: boolean; store: PlanStore; onOpen: () => void }) {
   const [edit, setEdit] = useState(false);

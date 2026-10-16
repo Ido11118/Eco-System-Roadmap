@@ -2,7 +2,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
-import { Check } from "lucide-react";
+import { Check, Eye, EyeOff, CircleCheck } from "lucide-react";
 import { api, ApiErr } from "@/lib/api";
 import { FormError } from "@/components/AuthShell";
 
@@ -11,6 +11,7 @@ export function RegisterForm({ domains }: { domains: { id: number; name: string 
   const [sel, setSel] = useState<number[]>([]);
   const [cross, setCross] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,14 +40,21 @@ export function RegisterForm({ domains }: { domains: { id: number; name: string 
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="label" htmlFor="password">סיסמה</label>
-          <input id="password" className="input h-10" dir="ltr" type="password" minLength={8} required autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
+          <PasswordInput id="password" value={f.password} onChange={(v) => setF({ ...f, password: v })} show={show} onToggle={() => setShow((x) => !x)} />
+          <p className="mt-1 text-[11px] text-ink-400">8 תווים לפחות</p>
         </div>
         <div>
           <label className="label" htmlFor="password2">אימות סיסמה</label>
-          <input id="password2" className="input h-10" dir="ltr" type="password" minLength={8} required autoComplete="new-password" value={f.password2} onChange={(e) => setF({ ...f, password2: e.target.value })} />
+          <PasswordInput id="password2" value={f.password2} onChange={(v) => setF({ ...f, password2: v })} show={show} onToggle={() => setShow((x) => !x)}
+            status={!f.password2 ? undefined : f.password2 === f.password ? "match" : "mismatch"} />
+          {f.password2 && f.password2 !== f.password && <p className="mt-1 text-[11px] text-red-600">הסיסמאות אינן תואמות</p>}
         </div>
       </div>
       <div>
+        <div className="mb-2 flex items-start gap-2 rounded-md bg-brand-50 px-3 py-2 text-[12.5px] text-brand-900">
+          <Eye size={15} className="mt-0.5 shrink-0" />
+          <span>לאחר אישור החשבון תוכל <b>לצפות בכל תוכנית העבודה</b> — אין צורך לבקש זאת. כאן מסמנים רק את התחומים שבהם תרצה גם <b>לערוך</b>.</span>
+        </div>
         <div className="label">תחומים שבהם מבוקשת הרשאת עריכה <span className="font-normal text-ink-400">(אופציונלי)</span></div>
         <div className="flex flex-wrap gap-1.5">
           {domains.map((d) => (
@@ -67,5 +75,23 @@ export function RegisterForm({ domains }: { domains: { id: number; name: string 
         כבר רשום? <Link href="/login" className="font-medium text-brand-600 hover:underline">להתחברות</Link>
       </p>
     </form>
+  );
+}
+
+/** שדה סיסמה עם "עין" להצגה/הסתרה, וסימון V כשהאימות תואם */
+function PasswordInput({ id, value, onChange, show, onToggle, status }: {
+  id: string; value: string; onChange: (v: string) => void; show: boolean; onToggle: () => void; status?: "match" | "mismatch";
+}) {
+  return (
+    <div className="relative">
+      <input id={id} className={clsx("input h-10 pl-16", status === "match" && "border-green-500", status === "mismatch" && "border-red-400")}
+        dir="ltr" type={show ? "text" : "password"} minLength={8} required autoComplete="new-password" value={value} onChange={(e) => onChange(e.target.value)} />
+      <div className="absolute inset-y-0 left-1.5 flex items-center gap-1">
+        {status === "match" && <CircleCheck size={16} className="text-green-600" aria-label="הסיסמאות תואמות" data-testid={`${id}-match`} />}
+        <button type="button" className="icon-btn h-7 w-7" onClick={onToggle} aria-label={show ? "הסתרת הסיסמה" : "הצגת הסיסמה"} title={show ? "הסתרת הסיסמה" : "הצגת הסיסמה"} data-testid={`${id}-eye`}>
+          {show ? <EyeOff size={15} /> : <Eye size={15} />}
+        </button>
+      </div>
+    </div>
   );
 }

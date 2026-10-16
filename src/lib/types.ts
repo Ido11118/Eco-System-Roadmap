@@ -70,7 +70,8 @@ export type UserPreferences = {
 export type TextSize = "sm" | "md" | "lg" | "xl";
 
 export type ViewConfig = {
-  domainIds: number[]; // ריק = הכל
+  v?: 2; // גרסת המבנה: מ-2, domainIds כולל גם את השורות הרוחביות (מזהים שליליים)
+  domainIds: number[]; // ריק = הכל. -1 = גורמים משפיעים, -2 = מופעים רוחביים
   teamIds: number[];
   statuses: string[];
   priorities: string[];

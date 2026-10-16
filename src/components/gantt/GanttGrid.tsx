@@ -52,7 +52,7 @@ type Props = {
   /** קליק ימני על שם תחום / צוות (למשל: הסתרה מהתצוגה) */
   onLabelContextMenu?: (e: React.MouseEvent, domainId: number, teamId: number | null) => void;
   emptyText?: React.ReactNode;
-  /** הצגת סימון "קריאה בלבד" לצוותים ללא הרשאה (לא רלוונטי במצב השוואה) */
+  /** הצגת סימון "צפייה בלבד" לצוותים ללא הרשאה (לא רלוונטי במצב השוואה) */
   readOnlyHints?: boolean;
 };
 
@@ -165,11 +165,12 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
           {p.crossGroups.map((g) => {
             const h = g.lanes.reduce((s, l) => s + l.height, 0);
             return (
-              <div key={g.kind} className="flex border-b border-ink-200" data-cross={g.kind}>
+              <div key={g.kind} className="flex border-b border-ink-200" data-cross={g.kind}
+                onContextMenu={p.onLabelContextMenu ? (e) => { if (!(e.target as HTMLElement).closest(".gantt-timeline")) { e.preventDefault(); p.onLabelContextMenu!(e, g.kind === "INFLUENCE" ? -1 : -2, null); } } : undefined}>
                 <div className="sticky right-0 z-[28] flex shrink-0 items-center gap-1 border-l border-ink-200 bg-[#fbfcfe] px-2 text-[12px] font-semibold text-ink-700"
                   style={{ width: LABEL_W, height: h }}>
                   <span className="flex-1 truncate">{g.label}</span>
-                  {!g.editable && p.readOnlyHints !== false && <span className="text-[10px] font-normal text-ink-400">קריאה בלבד</span>}
+                  {!g.editable && p.readOnlyHints !== false && <span className="text-[10px] font-normal text-ink-400">צפייה בלבד</span>}
                 </div>
                 <div className={clsx("relative shrink-0 bg-[#fbfcfe]", !g.editable && p.readOnlyHints !== false && "readonly-hatch")} style={{ width: W, height: h }}>
                   {g.lanes.map((lane) => (
@@ -210,7 +211,7 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
                             <span className={clsx("flex-1 leading-tight", merged ? "text-[13px] font-bold text-ink-900" : "text-[12.5px] font-medium text-ink-700")}>{t.name}</span>
                             {p.teamLabelExtra?.(t.id)}
                           </div>
-                          {!editable && p.readOnlyHints !== false && <div className="absolute bottom-1 right-2 text-[10px] text-ink-400">קריאה בלבד</div>}
+                          {!editable && p.readOnlyHints !== false && <div className="absolute bottom-1 right-2 text-[10px] text-ink-400">צפייה בלבד</div>}
                         </div>
                         <div className="relative flex flex-col">
                           {lanes.map((lane) => (

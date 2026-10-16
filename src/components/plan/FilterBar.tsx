@@ -14,7 +14,8 @@ import { MultiSelect, Floating } from "@/components/ui/popover";
 import { useTooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/dialog";
-import { shiftTime, timeLabel, defaultViewConfig } from "./filters";
+import { shiftTime, timeLabel, defaultViewConfig, CROSS_FILTER } from "./filters";
+import { CROSS_ROW_LABELS } from "@/lib/constants";
 import { sanitizeView, TEXT_SIZES, useTextSize } from "./prefs";
 import { useMe } from "./ui";
 
@@ -25,7 +26,14 @@ export function FilterBar({ data, view, setView, onToday, mode, onLocate }: {
   onLocate?: (itemId: number) => void;
 }) {
   const cat = useCatalog();
-  const domainOpts = data.domains.map((d) => ({ value: d.id, label: d.name }));
+  // בגאנט ובהשוואה אפשר לסנן גם את השורות הרוחביות (בטבלה אין מידע רוחבי)
+  const domainOpts = [
+    ...data.domains.map((d) => ({ value: d.id, label: d.name, group: mode === "table" ? undefined : "תחומים" })),
+    ...(mode === "table" ? [] : [
+      { value: CROSS_FILTER.INFLUENCE, label: CROSS_ROW_LABELS.INFLUENCE, group: "רוחבי" },
+      { value: CROSS_FILTER.CROSS_EVENT, label: CROSS_ROW_LABELS.CROSS_EVENT, group: "רוחבי" },
+    ]),
+  ];
   const teamOpts = data.teams
     .filter((t) => view.domainIds.length === 0 || view.domainIds.includes(t.domainId))
     .map((t) => ({ value: t.id, label: t.name, group: data.domains.find((d) => d.id === t.domainId)?.name }));
@@ -34,7 +42,7 @@ export function FilterBar({ data, view, setView, onToday, mode, onLocate }: {
     // שורה אחת, זהה בגאנט ובטבלה (ההבדל היחיד: כפתורי השכבות בגאנט). כשאין מקום — שדה החיפוש מתכווץ, לא נוספת שורה.
     <div className="flex flex-nowrap items-center gap-1.5 border-b border-ink-200 bg-white px-4 py-2 [&>*]:shrink-0 [&>.search-box]:shrink" data-testid="filter-bar">
       <SearchBox data={data} value={view.search} onChange={(q) => setView({ ...view, search: q })} onLocate={onLocate} />
-      <MultiSelect label="תחום" options={domainOpts} value={view.domainIds}
+      <MultiSelect label="תחום" options={domainOpts} value={mode === "table" ? view.domainIds.filter((d) => d > 0) : view.domainIds} groups={mode !== "table"}
         onChange={(v) => setView({ ...view, domainIds: v, teamIds: view.teamIds.filter((t) => { const dom = data.teams.find((x) => x.id === t)?.domainId; return dom !== undefined && (v.length === 0 || v.includes(dom)); }) })} />
       <MultiSelect label="צוות" options={teamOpts} value={view.teamIds} groups onChange={(v) => setView({ ...view, teamIds: v })} />
       <MultiSelect label="סטטוס" options={cat.statuses.map((s) => ({ value: s.key, label: s.label }))} value={view.statuses}

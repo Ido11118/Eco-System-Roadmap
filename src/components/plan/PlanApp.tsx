@@ -146,7 +146,7 @@ export function PlanApp({ me }: { me: Me }) {
     ...live,
     createItem: async (v) => {
       const it = await live.createItem(v);
-      if (it) reveal({ kind: "item", teamId: it.teamId, status: it.status, priority: it.priority, name: it.name, notes: it.notes, startWeek: it.startWeek, endWeek: it.endWeek });
+      if (it) reveal({ kind: "item", teamId: it.teamId, rowKind: live.data?.rows.find((r) => r.id === it.rowId)?.kind, status: it.status, priority: it.priority, name: it.name, notes: it.notes, startWeek: it.startWeek, endWeek: it.endWeek });
       return it;
     },
     createMilestone: async (v) => {
@@ -208,7 +208,7 @@ export function PlanApp({ me }: { me: Me }) {
         {snapId && mode !== "compare" && (
           <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-[12.5px] text-amber-900" data-testid="snapshot-banner">
             <Eye size={14} />
-            <span>צופה ב-Snapshot <b>{snapMeta?.name ?? `#${snapId}`}</b>{snapMeta ? ` (${fmtDate(snapMeta.asOfDate)})` : ""}{snapQ.data ? ` · גרסה ${snapQ.data.revision.revisionNo}` : ""} · לקריאה בלבד</span>
+            <span>צופה ב-Snapshot <b>{snapMeta?.name ?? `#${snapId}`}</b>{snapMeta ? ` (${fmtDate(snapMeta.asOfDate)})` : ""}{snapQ.data ? ` · גרסה ${snapQ.data.revision.revisionNo}` : ""} · צפייה בלבד</span>
             {snapMeta?.canManage && (
               <button className="btn-ghost btn-sm mr-auto text-amber-900 hover:bg-amber-100" onClick={() => router.push(`/snapshots/${snapId}/edit`)} data-testid="banner-edit-snapshot">
                 <Pencil size={13} />עריכת תמונת המצב
@@ -281,7 +281,7 @@ function Legend({ readOnly }: { readOnly: boolean }) {
         <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rotate-45 rounded-[2px] bg-violet-600" />אבן דרך</span>
         <span className="flex items-center gap-1"><span className="sprint-band inline-block h-3 w-5" />ספרינט (לכל התחום)</span>
       </div>
-      {readOnly ? <span className="mr-auto flex items-center gap-1"><Lock size={11} />קריאה בלבד</span>
+      {readOnly ? <span className="mr-auto flex items-center gap-1"><Lock size={11} />צפייה בלבד</span>
         : <span className="mr-auto">לחיצה/גרירה על שורה מסמנת טווח ואז <b>+</b> להוספה · לחיצה כפולה = תכולה · גרור קובייה להזזה · קליק ימני לאפשרויות · <span className="kbd">Ctrl+Z</span> ביטול</span>}
     </footer>
   );

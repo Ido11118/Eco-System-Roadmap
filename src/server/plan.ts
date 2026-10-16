@@ -7,6 +7,7 @@ import {
 import type { ItemDTO, Me, MilestoneDTO, PlanData, RowDTO, SprintDTO } from "@/lib/types";
 import { ApiError } from "./errors";
 import { loadCatalog } from "./catalog";
+import { DELETED_RETENTION_DAYS } from "@/lib/constants";
 import type { Catalog } from "@/lib/catalog";
 
 // ---------------------------------------------------------------------------
@@ -347,7 +348,7 @@ export async function restoreItem(me: Me, id: number) {
 
 /** תכולות שנמחקו (ב-180 הימים האחרונים) — לשחזור עם אותו ID. רק בתחומים שהמשתמש מורשה לערוך. */
 export async function listDeletedItems(me: Me) {
-  const since = new Date(Date.now() - 180 * 86400000);
+  const since = new Date(Date.now() - DELETED_RETENTION_DAYS * 86400000);
   const rows = await db.select({ i: workItems, kind: workRows.kind, rowTeam: workRows.teamId, deletedBy: users.fullName })
     .from(workItems).innerJoin(workRows, eq(workRows.id, workItems.rowId)).leftJoin(users, eq(users.id, workItems.deletedById))
     .where(and(sql`${workItems.deletedAt} is not null`, sql`${workItems.deletedAt} > ${since}`))

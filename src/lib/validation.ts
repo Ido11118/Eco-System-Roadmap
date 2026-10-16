@@ -63,7 +63,8 @@ export const sprintPatchSchema = z.object({
 });
 
 export const viewConfigSchema = z.object({
-  domainIds: z.array(id).default([]),
+  v: z.literal(2).optional(),
+  domainIds: z.array(z.number().int()).default([]), // מזהים שליליים = שורות רוחביות
   teamIds: z.array(id).default([]),
   statuses: z.array(status).default([]),
   priorities: z.array(priority).default([]),

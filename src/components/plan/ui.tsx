@@ -6,7 +6,7 @@ import { X, Trash2, History, Info, AlertTriangle, Lock, Diamond, Flag } from "lu
 import { api } from "@/lib/api";
 import type { ItemDTO, Me, MilestoneDTO, PlanData, SprintDTO } from "@/lib/types";
 import {
-  CROSS_ROW_LABELS,
+  CROSS_ROW_LABELS, DELETED_RETENTION_DAYS,
 } from "@/lib/constants";
 import { currentWeekIL, fmtDate, isISODate, todayIL, weekLabel, addDays, type ISODate } from "@/lib/weeks";
 import { Dialog, useConfirm } from "@/components/ui/dialog";
@@ -204,7 +204,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
       </div>
       {!editable && (
         <div className="mx-5 mt-3 flex items-center gap-2 rounded-md bg-ink-50 px-3 py-2 text-[12px] text-ink-500">
-          <Lock size={13} /> {store.readOnly ? "תצוגת Snapshot — לקריאה בלבד" : "אין לך הרשאת עריכה לתחום זה — לקריאה בלבד"}
+          <Lock size={13} /> {store.readOnly ? "תצוגת Snapshot — צפייה בלבד" : "אין לך הרשאת עריכה לתחום זה — צפייה בלבד"}
         </div>
       )}
       {store.kind === "live" && (
@@ -261,7 +261,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
       {editable && (
         <div className="flex items-center gap-2 border-t border-ink-100 px-5 py-3">
           <button className="btn-ghost text-red-600 hover:bg-red-50" onClick={async () => {
-            if (await confirm({ title: "מחיקת תכולה", text: <>האם למחוק את התכולה &quot;{item.name}&quot;? ניתן יהיה לבטל מיד לאחר המחיקה.</>, confirm: "מחיקה", danger: true })) {
+            if (await confirm({ title: "מחיקת תכולה", text: <>האם אתה בטוח שברצונך למחוק את &quot;{item.name}&quot;?<span className="mt-1.5 block text-[12px] text-ink-500">אם תרצה לשחזר, התכולה תהיה זמינה ב-{DELETED_RETENTION_DAYS} הימים הקרובים תחת &quot;תכולות שנמחקו&quot; (עם אותו ID).</span></>, confirm: "מחיקה", danger: true })) {
               await store.deleteItem(item); onClose();
             }
           }}><Trash2 size={14} />מחיקת תכולה</button>

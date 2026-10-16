@@ -6,7 +6,7 @@ import {
   Plus, MoreVertical, Trash2, ArrowUpToLine, ArrowDownToLine, Diamond, Flag, ExternalLink, PanelTopOpen, Pencil, Eye, EyeOff, X, RectangleHorizontal,
 } from "lucide-react";
 import type { ItemDTO, MilestoneDTO, PlanData, RowDTO, SprintDTO, ViewConfig } from "@/lib/types";
-import { CROSS_ROW_LABELS } from "@/lib/constants";
+import { CROSS_ROW_LABELS, DELETED_RETENTION_DAYS } from "@/lib/constants";
 import { useCatalog } from "@/components/CatalogProvider";
 import {
   buildTimeline, dayOfWeek, fmtDate, addDays, weekEndOf, weekRangeLabel, weekNumber, weekStartOf, daysDiff,
@@ -19,7 +19,7 @@ import { useConfirm } from "@/components/ui/dialog";
 import { findOverlap, type PlanStore } from "@/components/plan/store";
 import { uiZoom } from "@/components/plan/prefs";
 import { useWorkspaceUI, userName } from "@/components/plan/ui";
-import { hasContentFilter, hideDomain, hideTeam, itemMatches, onlyDomain, timeWindow, visibleTeamIds } from "@/components/plan/filters";
+import { CROSS_FILTER, crossRowVisible, hasContentFilter, hideDomain, hideTeam, itemMatches, onlyDomain, timeWindow, visibleTeamIds } from "@/components/plan/filters";
 import { useToast } from "@/components/ui/toast";
 import { GanttGrid, useCurrentWeek, type CrossGroup, type GanttGridHandle, type LaneSpec } from "./GanttGrid";
 import { geometry } from "./geometry";
@@ -127,6 +127,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     const groups: CrossGroup[] = [];
     const laneItems = new Map<string, ItemDTO[]>();
     for (const kind of ["INFLUENCE", "CROSS_EVENT"] as const) {
+      if (!crossRowVisible(view, kind)) continue; // סינון התחומים יכול להסתיר גם את השורות הרוחביות
       const rows = data.rows.filter((r) => r.kind === kind);
       const items = data.items.filter((i) => rows.some((r) => r.id === i.rowId));
       const lanes = layoutLanes(items, rows.map((r) => r.id), (i) => i.rowId,
@@ -142,7 +143,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
       });
     }
     return { groups, laneItems };
-  }, [data.rows, data.items, timeline, crossLaneH, store]);
+  }, [data.rows, data.items, timeline, crossLaneH, store, view.domainIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const teams = useMemo(() => data.teams.filter((t) => teamsVisible.has(t.id)), [data.teams, teamsVisible]);
 
@@ -614,7 +615,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
                     </div>
                     <div className="my-1 border-t border-ink-100" />
                     <MenuItem danger icon={<Trash2 size={14} />} onClick={async () => {
-                      if (await confirm({ title: "מחיקת תכולה", text: `למחוק את "${menu.item!.name}"?`, confirm: "מחיקה", danger: true })) await store.deleteItem(menu.item!);
+                      if (await confirm({ title: "מחיקת תכולה", confirm: "מחיקה", danger: true, text: <>האם אתה בטוח שברצונך למחוק את &quot;{menu.item!.name}&quot;?<span className="mt-1.5 block text-[12px] text-ink-500">אם תרצה לשחזר, התכולה תהיה זמינה ב-{DELETED_RETENTION_DAYS} הימים הקרובים תחת &quot;תכולות שנמחקו&quot; (עם אותו ID).</span></> })) await store.deleteItem(menu.item!);
                     }}>מחיקת תכולה</MenuItem>
                   </>
                 )}
@@ -666,7 +667,8 @@ export function LabelMenu({ label, data, view, setView, toast }: {
   label: { domainId: number; teamId: number | null }; data: PlanData; view: ViewConfig; setView: (v: ViewConfig) => void;
   toast: ReturnType<typeof useToast>;
 }) {
-  const dom = data.domains.find((d) => d.id === label.domainId);
+  const crossName = label.domainId === CROSS_FILTER.INFLUENCE ? CROSS_ROW_LABELS.INFLUENCE : label.domainId === CROSS_FILTER.CROSS_EVENT ? CROSS_ROW_LABELS.CROSS_EVENT : null;
+  const dom = crossName ? { id: label.domainId, name: crossName } : data.domains.find((d) => d.id === label.domainId);
   const team = label.teamId !== null ? data.teams.find((t) => t.id === label.teamId) : undefined;
   const apply = (v: ViewConfig | null, what: string) => {
     if (!v) { toast.show("error", `לא ניתן להסתיר את ה${what} האחרון שמוצג`); return; }
@@ -677,8 +679,8 @@ export function LabelMenu({ label, data, view, setView, toast }: {
     <>
       <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-ink-500">{dom?.name}{team && team.name !== dom?.name ? ` / ${team.name}` : ""}</div>
       {team && <MenuItem icon={<EyeOff size={14} />} onClick={() => apply(hideTeam(view, data, team.id), "צוות")}>הסתרת הצוות &quot;{team.name}&quot;</MenuItem>}
-      <MenuItem icon={<EyeOff size={14} />} onClick={() => apply(hideDomain(view, data, label.domainId), "תחום")}>הסתרת התחום &quot;{dom?.name}&quot;</MenuItem>
-      <MenuItem icon={<Eye size={14} />} onClick={() => setView(onlyDomain(view, label.domainId))}>הצגת התחום הזה בלבד</MenuItem>
+      <MenuItem icon={<EyeOff size={14} />} onClick={() => apply(hideDomain(view, data, label.domainId), "תחום")}>{crossName ? <>הסתרת השורה &quot;{crossName}&quot;</> : <>הסתרת התחום &quot;{dom?.name}&quot;</>}</MenuItem>
+      <MenuItem icon={<Eye size={14} />} onClick={() => setView(onlyDomain(view, label.domainId))}>{crossName ? "הצגת השורה הזו בלבד" : "הצגת התחום הזה בלבד"}</MenuItem>
       {filtered && <MenuItem icon={<Eye size={14} />} onClick={() => setView({ ...view, domainIds: [], teamIds: [] })}>הצגת כל התחומים והצוותים</MenuItem>}
     </>
   );

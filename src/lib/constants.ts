@@ -34,3 +34,6 @@ export const CROSS_ROW_LABELS = {
   INFLUENCE: "גורמים משפיעים",
   CROSS_EVENT: "מופעים רוחביים",
 } as const;
+
+/** כמה ימים תכולה שנמחקה זמינה לשחזור ב"תכולות שנמחקו" */
+export const DELETED_RETENTION_DAYS = 180;
