@@ -6,19 +6,21 @@ import { X, Trash2, History, Info, AlertTriangle, Lock, Diamond, Flag } from "lu
 import { api } from "@/lib/api";
 import type { ItemDTO, Me, MilestoneDTO, PlanData, SprintDTO } from "@/lib/types";
 import {
-  STATUSES, STATUS_META, PRIORITIES, PRIORITY_META, NOTE_RECOMMENDED, CROSS_ROW_LABELS, type Status, type PriorityT,
+  CROSS_ROW_LABELS,
 } from "@/lib/constants";
 import { currentWeekIL, fmtDate, isISODate, todayIL, weekLabel, addDays, type ISODate } from "@/lib/weeks";
 import { Dialog, useConfirm } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { WeekPicker } from "./WeekPicker";
+import { useCatalog } from "@/components/CatalogProvider";
 import type { PlanStore } from "./store";
 
-type NewItemPrefill = { teamId?: number | null; rowId?: number; startWeek?: ISODate; endWeek?: ISODate; name?: string; status?: Status };
+type NewItemPrefill = { teamId?: number | null; rowId?: number; startWeek?: ISODate; endWeek?: ISODate; name?: string; status?: string };
 type MsPrefill = { teamId?: number | null; date?: ISODate };
-type SprintPrefill = { teamId?: number; startDate?: ISODate };
+type SprintPrefill = { domainId?: number; startDate?: ISODate; endDate?: ISODate; name?: string };
 
 type UI = {
+  me: Me;
   openItem: (id: number) => void;
   selectedItemId: number | null;
   openNewItem: (p?: NewItemPrefill) => void;
@@ -26,6 +28,10 @@ type UI = {
   openSprint: (s: SprintDTO | null, prefill?: SprintPrefill) => void;
 };
 const UICtx = createContext<UI | null>(null);
+/** המשתמש המחובר (בתוך מסכי העבודה) */
+export function useMe(): Me | null {
+  return useContext(UICtx)?.me ?? null;
+}
 export function useWorkspaceUI() {
   const c = useContext(UICtx);
   if (!c) throw new Error("WorkspaceUI missing");
@@ -51,8 +57,8 @@ export function placeLabel(data: PlanData | undefined, item: Pick<ItemDTO, "rowI
   return { domain: dom?.name ?? "—", team: team?.name ?? "—" };
 }
 
-export function StatusPill({ status, small }: { status: Status; small?: boolean }) {
-  const m = STATUS_META[status];
+export function StatusPill({ status, small }: { status: string; small?: boolean }) {
+  const m = useCatalog().status(status);
   return (
     <span className={clsx("inline-flex items-center gap-1.5 rounded-full border font-medium", small ? "h-5 px-1.5 text-[11px]" : "h-6 px-2 text-[12px]")}
       style={{ background: m.bg, color: m.fg, borderColor: m.border }}>
@@ -61,21 +67,26 @@ export function StatusPill({ status, small }: { status: Status; small?: boolean 
   );
 }
 
-export function StatusSelect({ value, onChange, disabled, id }: { value: Status; onChange: (s: Status) => void; disabled?: boolean; id?: string }) {
-  const m = STATUS_META[value];
+export function StatusSelect({ value, onChange, disabled, id }: { value: string; onChange: (s: string) => void; disabled?: boolean; id?: string }) {
+  const cat = useCatalog();
+  const m = cat.status(value);
   return (
-    <select id={id} className="input font-medium" disabled={disabled} value={value} onChange={(e) => onChange(e.target.value as Status)}
+    <select id={id} className="input font-medium" disabled={disabled} value={value} onChange={(e) => onChange(e.target.value)}
       style={{ background: m.bg, color: m.fg, borderColor: m.border }}>
-      {STATUSES.map((s) => <option key={s} value={s} style={{ background: "#fff", color: "#0f172a" }}>{STATUS_META[s].label}</option>)}
+      {cat.statuses.map((s) => <option key={s.key} value={s.key} style={{ background: "#fff", color: "#0f172a" }}>{s.label}</option>)}
+      {!cat.statuses.some((s) => s.key === value) && <option value={value}>{m.label}</option>}
     </select>
   );
 }
 
-export function PrioritySelect({ value, onChange, disabled, id }: { value: PriorityT; onChange: (p: PriorityT) => void; disabled?: boolean; id?: string }) {
+export function PrioritySelect({ value, onChange, disabled, id }: { value: string; onChange: (p: string) => void; disabled?: boolean; id?: string }) {
+  const cat = useCatalog();
+  const none = value === cat.defaultPriority;
   return (
-    <select id={id} className="input" disabled={disabled} value={value} onChange={(e) => onChange(e.target.value as PriorityT)}
-      style={{ color: value === "NONE" ? undefined : PRIORITY_META[value].color, fontWeight: value === "NONE" ? 400 : 600 }}>
-      {PRIORITIES.map((p) => <option key={p} value={p} style={{ color: "#0f172a", fontWeight: 400 }}>{PRIORITY_META[p].label}</option>)}
+    <select id={id} className="input" disabled={disabled} value={value} onChange={(e) => onChange(e.target.value)}
+      style={{ color: none ? undefined : cat.priority(value).color, fontWeight: none ? 400 : 600 }}>
+      {cat.priorities.map((p) => <option key={p.key} value={p.key} style={{ color: "#0f172a", fontWeight: 400 }}>{p.label}</option>)}
+      {!cat.priorities.some((p) => p.key === value) && <option value={value}>{cat.priority(value).label}</option>}
     </select>
   );
 }
@@ -111,12 +122,13 @@ export function WorkspaceUIProvider({ store, me, children }: { store: PlanStore;
   const [ms, setMs] = useState<{ m: MilestoneDTO | null; prefill?: MsPrefill } | null>(null);
   const [sp, setSp] = useState<{ s: SprintDTO | null; prefill?: SprintPrefill } | null>(null);
   const ui = useMemo<UI>(() => ({
+    me,
     openItem: (id) => setItemId(id),
     selectedItemId: itemId,
     openNewItem: (p) => setNewItem(p ?? {}),
     openMilestone: (m, prefill) => setMs({ m, prefill }),
     openSprint: (s, prefill) => setSp({ s, prefill }),
-  }), [itemId]);
+  }), [itemId, me]);
   return (
     <UICtx.Provider value={ui}>
       {children}
@@ -136,6 +148,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
   const data = store.data;
   const item = data?.items.find((i) => i.id === id);
   const confirm = useConfirm();
+  const cat = useCatalog();
   const [tab, setTab] = useState<"details" | "history">("details");
   const [name, setName] = useState(item?.name ?? "");
   const [notes, setNotes] = useState(item?.notes ?? "");
@@ -171,7 +184,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
   const editable = store.canEditRow(row);
   const place = placeLabel(data, item);
   const save = (patch: Parameters<PlanStore["updateItem"]>[1]) => store.updateItem(item, patch, { silent: false });
-  const recommendNote = NOTE_RECOMMENDED.includes(item.status) && !item.notes.trim();
+  const recommendNote = cat.status(item.status).noteRecommended && !item.notes.trim();
   return (
     <aside className="anim-drawer fixed bottom-0 left-0 top-0 z-[70] flex w-[420px] max-w-[100vw] flex-col border-r border-ink-200 bg-white shadow-pop" data-testid="item-panel">
       <div className="flex items-start gap-2 border-b border-ink-100 px-5 pb-3 pt-4">
@@ -219,7 +232,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
             {recommendNote && editable && (
               <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800">
                 <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-                מומלץ להוסיף הסבר בשדה ההערות לסטטוס &quot;{STATUS_META[item.status].label}&quot;.
+                מומלץ להוסיף הסבר בשדה ההערות לסטטוס &quot;{cat.status(item.status).label}&quot;.
               </div>
             )}
             <div>
@@ -286,6 +299,7 @@ function NewItemDialog({ store, prefill, onClose, onCreated }: {
 }) {
   const data = store.data!;
   const toast = useToast();
+  const cat = useCatalog();
   const initialTarget = (() => {
     if (prefill.rowId) {
       const r = data.rows.find((x) => x.id === prefill.rowId);
@@ -299,7 +313,7 @@ function NewItemDialog({ store, prefill, onClose, onCreated }: {
   const cw = currentWeekIL();
   const [f, setF] = useState({
     name: prefill.name ?? "", startWeek: prefill.startWeek ?? cw, endWeek: prefill.endWeek ?? prefill.startWeek ?? cw,
-    status: (prefill.status ?? "PLANNED") as Status, priority: "NONE" as PriorityT, notes: "",
+    status: prefill.status ?? cat.defaultStatus, priority: cat.defaultPriority, notes: "",
   });
   const [busy, setBusy] = useState(false);
   const teamId = target.startsWith("team:") ? Number(target.slice(5)) : null;
@@ -363,7 +377,7 @@ function NewItemDialog({ store, prefill, onClose, onCreated }: {
           <div><label className="label">סטטוס</label><StatusSelect value={f.status} onChange={(s) => setF({ ...f, status: s })} /></div>
           <div><label className="label">תיעדוף</label><PrioritySelect value={f.priority} onChange={(p) => setF({ ...f, priority: p })} /></div>
         </div>
-        {NOTE_RECOMMENDED.includes(f.status) && !f.notes.trim() && (
+        {cat.status(f.status).noteRecommended && !f.notes.trim() && (
           <div className="flex items-center gap-2 text-[12px] text-amber-700"><Info size={13} />מומלץ להוסיף הסבר בהערות לסטטוס זה.</div>
         )}
         <div><label className="label">הערות</label><textarea className="input min-h-[70px]" value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></div>
@@ -435,17 +449,18 @@ function SprintDialog({ store, s, prefill, onClose }: { store: PlanStore; s: Spr
   const data = store.data!;
   const confirm = useConfirm();
   const toast = useToast();
-  const editable = s ? store.canEditTeam(s.teamId) : true;
+  const editable = s ? store.canEditDomain(s.domainId) : true;
   const start = s?.startDate ?? prefill?.startDate ?? currentWeekIL();
+  const editableDomains = data.domains.filter((d) => store.canEditDomain(d.id));
   const [f, setF] = useState({
-    name: s?.name ?? "", startDate: start, endDate: s?.endDate ?? addDays(start, 13),
-    teamId: String(s?.teamId ?? prefill?.teamId ?? data.teams.find((t) => store.canEditTeam(t.id))?.id ?? ""), notes: s?.notes ?? "",
+    name: s?.name ?? prefill?.name ?? "", startDate: start, endDate: s?.endDate ?? prefill?.endDate ?? addDays(start, 11),
+    domainId: String(s?.domainId ?? prefill?.domainId ?? editableDomains[0]?.id ?? ""), notes: s?.notes ?? "",
   });
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!f.name.trim() || !f.teamId) { toast.show("error", "יש למלא שם ושיוך לצוות"); return; }
+    if (!f.name.trim() || !f.domainId) { toast.show("error", "יש למלא שם ושיוך לתחום"); return; }
     if (f.endDate < f.startDate) { toast.show("error", "תאריך הסיום אינו יכול להיות לפני תאריך ההתחלה"); return; }
-    const v = { name: f.name.trim(), startDate: f.startDate, endDate: f.endDate, teamId: Number(f.teamId), notes: f.notes };
+    const v = { name: f.name.trim(), startDate: f.startDate, endDate: f.endDate, domainId: Number(f.domainId), notes: f.notes };
     const ok = s ? await store.updateSprint(s, v) : await store.createSprint(v);
     if (ok) onClose();
   }
@@ -462,7 +477,13 @@ function SprintDialog({ store, s, prefill, onClose }: { store: PlanStore; s: Spr
         <fieldset disabled={!editable} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div><label className="label">שם *</label><input className="input" data-autofocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Sprint 12" /></div>
-            <div><label className="label">צוות *</label><ScopeSelect data={data} store={store} value={f.teamId} onChange={(v) => setF({ ...f, teamId: v })} allowCross={false} /></div>
+            <div>
+              <label className="label">תחום *</label>
+              <select className="input" value={f.domainId} onChange={(e) => setF({ ...f, domainId: e.target.value })} data-testid="sprint-domain">
+                {(editable && !s ? editableDomains : data.domains.filter((d) => editableDomains.includes(d) || d.id === s?.domainId)).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+              <p className="mt-1 text-[11px] text-ink-400">הספרינט חל על כל הצוותים בתחום.</p>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="label">תאריך התחלה</label><input type="date" className="input" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} /></div>

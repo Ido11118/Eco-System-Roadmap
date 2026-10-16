@@ -31,35 +31,30 @@ async function main() {
       if (w <= 0 && w + len > 0 && rnd(4)) status = "IN_PROGRESS";
       if (w > 0 && status === "IN_PROGRESS") status = "PLANNED";
       await db.insert(workItems).values({ name: NAMES[rnd(NAMES.length)], rowId: r.id, teamId: r.teamId, startWeek: start, endWeek: end,
-        status: status as "PLANNED", priority: PRIOS[rnd(PRIOS.length)] as "NONE", notes: status === "BLOCKED" ? "ממתין לאישור תקציב" : "",
+        status, priority: PRIOS[rnd(PRIOS.length)], notes: status === "BLOCKED" ? "ממתין לאישור תקציב" : "",
         createdById: uid, updatedById: uid });
       w += len + rnd(3);
     }
   }
   const cross = await db.select().from(workRows).where(and(sql`${workRows.kind} <> 'TEAM'`, isNull(workRows.deletedAt)));
-  const inf = cross.find((r) => r.kind === "INFLUENCE")!, ev = cross.find((r) => r.kind === "CROSS_EVENT")!;
+  const ev = cross.find((r) => r.kind === "CROSS_EVENT")!; // חגים: npm run db:holidays
   const crossItems = [
-    { row: inf, name: "ראש השנה", s: "2026-09-06", e: "2026-09-13" },
-    { row: inf, name: "יום כיפור", s: "2026-09-20", e: "2026-09-20" },
-    { row: inf, name: "סוכות", s: "2026-09-20", e: "2026-09-27" },
-    { row: inf, name: "חנוכה", s: "2026-12-06", e: "2026-12-06" },
-    { row: inf, name: "פסח", s: "2027-03-21", e: "2027-03-28" },
     { row: ev, name: "הצגת תוכנית רבעונית Q4", s: "2026-10-04", e: "2026-10-04" },
     { row: ev, name: "כנס שנתי", s: "2026-11-15", e: "2026-11-15" },
     { row: ev, name: "דיון היערכות 2027", s: "2026-12-13", e: "2026-12-20" },
   ];
-  for (const x of crossItems) await db.insert(workItems).values({ name: x.name, rowId: x.row.id, teamId: null, startWeek: x.s, endWeek: x.e, createdById: uid, updatedById: uid });
+  for (const x of crossItems) await db.insert(workItems).values({ name: x.name, rowId: x.row.id, teamId: null, startWeek: x.s, endWeek: x.e, status: "PLANNED", priority: "NONE", createdById: uid, updatedById: uid });
   await db.insert(milestones).values([
     { name: "תחילת Q4", date: "2026-10-01", teamId: null, createdById: uid, updatedById: uid },
     { name: "הקפאת גרסה", date: "2026-11-05", teamId: 901, createdById: uid, updatedById: uid },
     { name: "מבצע", date: "2026-10-20", teamId: 402, createdById: uid, updatedById: uid },
   ]);
-  const sp: { name: string; startDate: string; endDate: string; teamId: number; createdById: number | null }[] = [];
-  for (const teamId of [201, 202, 203, 901]) for (let i = 0; i < 6; i++) {
+  // ספרינטים של שבועיים לכל התחום (אג"ם ומשואה)
+  for (const domainId of [2, 9]) for (let i = 0; i < 6; i++) {
     const s = addWeeks(cw, -4 + i * 2);
-    sp.push({ name: `Sprint ${30 + i}`, startDate: s, endDate: addWeeks(s, 2).replace(/\d\d$/, (d) => String(Number(d)).padStart(2, "0")), teamId, createdById: uid });
+    const end = new Date(Date.parse(s) + 11 * 86400000).toISOString().slice(0, 10); // ראשון עד חמישי של השבוע השני
+    await db.insert(sprints).values({ name: `Sprint ${30 + i}`, startDate: s, endDate: end, domainId, createdById: uid, updatedById: uid });
   }
-  for (const s of sp) { const end = new Date(Date.parse(s.startDate) + 11 * 86400000).toISOString().slice(0, 10); await db.insert(sprints).values({ ...s, endDate: end, updatedById: uid }); }
   console.log("✓ demo data inserted");
 }
 main().then(() => pool.end()).catch((e) => { console.error(e); process.exit(1); });

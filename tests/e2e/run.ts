@@ -4,7 +4,7 @@
 // מומלץ להריץ מול בסיס נתונים ייעודי לבדיקות — הבדיקות יוצרות משתמשים ותכולות.
 import { chromium, request, type APIRequestContext, type Browser, type Page } from "playwright";
 import { addWeeks, currentWeekIL, weekNumber } from "../../src/lib/weeks";
-import type { ItemDTO, PlanData, RowDTO } from "../../src/lib/types";
+import type { ItemDTO, PlanData, RowDTO, SprintDTO } from "../../src/lib/types";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const ADMIN = { email: process.env.SUPERUSER_EMAIL ?? "admin@example.org", password: process.env.SUPERUSER_PASSWORD ?? "ChangeMe-Admin-2026!" };
@@ -145,7 +145,7 @@ async function main() {
     assert((await json(C, "GET", "/api/admin/users")).status === 403, "C can list users");
     assert((await json(C, "POST", `/api/admin/users/${await userId(uA.email)}`, { action: "suspend" })).status === 403, "C can manage users");
     assert((await json(C, "GET", "/api/admin/audit")).status === 403, "C can read admin audit");
-    assert((await json(C, "POST", "/api/snapshots", { name: "x" })).status === 403, "C can create snapshot");
+    assert((await json(C, "POST", "/api/snapshots", { name: "x", scope: "shared" })).status === 403, "C can create a shared snapshot");
     const crossRow = plan0.rows.find((r) => r.kind === "CROSS_EVENT")!;
     assert((await json(C, "POST", "/api/items", { rowId: crossRow.id, name: `C-cross-${RUN}`, startWeek: addWeeks(cw, 50), endWeek: addWeeks(cw, 50) })).status === 200, "C cannot edit cross");
     const p = await uiLogin(browser, uC.email, PW);
@@ -172,6 +172,12 @@ async function main() {
     const y = lb.y + lb.height / 2;
     const x1 = await weekCenterX(pa, cw), x2 = await weekCenterX(pa, addWeeks(cw, 2));
     await pa.mouse.move(x1, y); await pa.mouse.down(); await pa.mouse.move((x1 + x2) / 2, y, { steps: 4 }); await pa.mouse.move(x2, y, { steps: 4 }); await pa.mouse.up();
+    // סימון בלבד — לא קופצת חלונית; "+" באמצע הטווח פותח: תכולה / אבן דרך / ספרינט
+    await pa.waitForSelector("[data-testid=sel-plus]");
+    assert(!(await pa.locator("[data-testid=quick-create]").count()), "popup opened on plain selection");
+    await pa.waitForTimeout(500);
+    await pa.click("[data-testid=sel-plus]");
+    await pa.click("[data-testid=sel-add-item]");
     await pa.waitForSelector("[data-testid=quick-create]");
     await shot(pa, "07-quick-create");
     await pa.fill("[data-testid=quick-name]", `סימון טווח ${RUN}`);
@@ -186,6 +192,7 @@ async function main() {
 
   // 8 ---------------------------------------------------------------
   await scenario(8, "הוספת תכולה דרך כפתור", async () => {
+    await pa.click("[data-testid=add-fab]"); // כפתור ההוספה הצף נפתח לתכולה / אבן דרך / ספרינט
     await pa.click("[data-testid=add-item]");
     await pa.fill("#ni-name", `כפתור ${RUN}`);
     await pa.selectOption("[data-testid=target-select]", `team:${T_SYS}`);
@@ -413,7 +420,9 @@ async function main() {
     await pa.waitForTimeout(300);
     const after = (await json<PlanData>(B, "GET", "/api/plan")).body.items.length;
     assert(before === after, "filtering changed data");
-    await pa.fill("[data-testid=search]", ""); // הסינון נשמר אישית — מנקים כדי לא להשפיע על התרחישים הבאים
+    // הסינונים נשמרים אישית (גם אלה שהגיעו מתצוגת ברירת המחדל) — מנקים כדי לא להשפיע על התרחישים הבאים
+    await pa.keyboard.press("Escape");
+    await pa.getByRole("button", { name: "ניקוי מסננים" }).click();
     await pa.waitForTimeout(1000);
     await json(A, "DELETE", `/api/views/${mine.id}`);
   });
@@ -422,18 +431,37 @@ async function main() {
   await scenario(21, "ספרינטים מוסתרים כברירת מחדל", async () => {
     const p = await uiLogin(browser, uB.email, PW);
     await p.waitForSelector("[data-testid=gantt-view]");
-    await json(admin, "POST", "/api/sprints", { name: `Sprint-${RUN}`, startDate: cw, endDate: addWeeks(cw, 1), teamId: T_AZ1 });
+    await json(admin, "POST", "/api/sprints", { name: `Sprint-${RUN}`, startDate: cw, endDate: addWeeks(cw, 1), domainId: AGAM });
     await p.reload(); await p.waitForSelector("[data-testid=gantt-view]");
     assert(!(await p.getByText(`Sprint-${RUN}`).count()), "sprint visible by default");
-    await p.click("[data-testid=display-options]");
-    await p.click("[data-testid=toggle-sprints]");
+    // ריחוף על אייקון השכבה: הסבר מעליו — "הצג ספרינטים" (ואחרי לחיצה "הסתר ספרינטים")
+    await p.hover("[data-testid=toggle-sprints]");
+    const tipEl = p.locator("[data-testid=tooltip]");
+    await tipEl.waitFor({ state: "visible" });
+    assert((await tipEl.innerText()).trim() === "הצג ספרינטים", `tooltip: ${await tipEl.innerText()}`);
+    const tb = (await tipEl.boundingBox())!, btn = (await p.locator("[data-testid=toggle-sprints]").boundingBox())!;
+    assert(tb.y + tb.height <= btn.y + 1, "tooltip should be above the icon");
+    await p.click("[data-testid=toggle-sprints]"); // מתג השכבה נמצא בשורת הסינון
+    await p.waitForTimeout(150);
+    assert((await tipEl.innerText()).trim() === "הסתר ספרינטים", `tooltip after click: ${await tipEl.innerText()}`);
     await p.waitForTimeout(300);
     assert(await p.getByText(`Sprint-${RUN}`).count() > 0, "sprint not shown after toggle");
     await shot(p, "21-sprints-on");
     await p.waitForTimeout(800);
     await p.reload(); await p.waitForSelector("[data-testid=gantt-view]");
     assert(await p.getByText(`Sprint-${RUN}`).count() > 0, "sprint preference not persisted");
+    // הספרינט "מולבש" על בלוק התחום כולו — בלי שורה נוספת, ומתחת לקוביות
+    const sp = (await json<PlanData>(admin, "GET", "/api/plan")).body.sprints.find((s) => s.name === `Sprint-${RUN}`)!;
+    const band = p.locator(`[data-domain-overlay="${AGAM}"] [data-sprint="${sp.id}"] .sprint-band`);
+    const domainBox = (await p.locator(`[data-domain="${AGAM}"]`).boundingBox())!;
+    const bandBox = (await band.boundingBox())!;
+    assert(Math.abs(bandBox.height - domainBox.height) <= 3 /* גבול התחום התחתון */, `band does not span the whole domain (${bandBox.height} vs ${domainBox.height})`);
+    assert(!(await p.locator(`[data-domain="${ESH}"] [data-sprint="${sp.id}"]`).count()), "sprint shown on another domain");
+    assert(await p.locator(`[data-domain-overlay="${AGAM}"]`).evaluate((el) => getComputedStyle(el).pointerEvents) === "none", "overlay blocks the gantt");
     await p.context().close();
+    // הרשאות: עריכת ספרינט לפי תחום
+    assert((await json(A, "POST", "/api/sprints", { name: "x", startDate: cw, endDate: cw, domainId: AGAM })).status === 200, "domain editor cannot create sprint");
+    assert((await json(A, "POST", "/api/sprints", { name: "x", startDate: cw, endDate: cw, domainId: ESH })).status === 403, "user created sprint in a domain without permission");
   });
 
   // 22 --------------------------------------------------------------
@@ -450,7 +478,7 @@ async function main() {
   });
 
   // 23 --------------------------------------------------------------
-  await scenario(23, "כותרות ועמודות קפואות נשארות במקום בעת גלילה", async () => {
+  await scenario(23, "כותרות (שנה/חודש/שבוע) ועמודות קפואות נשארות במקום; שורות רוחביות נגללות", async () => {
     const hdr0 = (await pa.locator(`[data-week="${cw}"]`).boundingBox())!;
     const team0 = (await pa.locator(`[data-team="${T_AZ1}"] > div`).first().boundingBox())!;
     const cross0 = (await pa.locator("[data-cross=INFLUENCE] > div").first().boundingBox())!;
@@ -459,7 +487,22 @@ async function main() {
     const hdr1 = (await pa.locator(`[data-week="${cw}"]`).boundingBox())!;
     const cross1 = (await pa.locator("[data-cross=INFLUENCE] > div").first().boundingBox())!;
     assert(Math.abs(hdr1.y - hdr0.y) < 1, `week header moved vertically ${hdr0.y}→${hdr1.y}`);
-    assert(Math.abs(cross1.y - cross0.y) < 1 && Math.abs(cross1.x - cross0.x) < 1, "cross rows label moved");
+    assert(cross1.y < cross0.y - 100, `cross rows should scroll up with the body (${cross0.y}→${cross1.y})`);
+    assert(Math.abs(cross1.x - cross0.x) < 1, "cross rows label moved horizontally");
+    // תכולה רוחבית שנגללת אל מתחת לעמודת התוויות ("גורמים משפיעים") — התווית מכסה אותה, ולא להפך
+    await pa.locator("[data-testid=gantt-scroll]").evaluate((el) => { el.scrollTop = 0; });
+    const label = (await pa.locator("[data-cross=INFLUENCE] > div").first().boundingBox())!;
+    const bar = pa.locator("[data-cross=INFLUENCE] [data-bar]").first();
+    const bb = (await bar.boundingBox())!;
+    const delta = (label.x + label.width / 2) - (bb.x + bb.width / 2);
+    await pa.locator("[data-testid=gantt-scroll]").evaluate((el, d) => { el.scrollLeft -= d; }, delta);
+    await pa.waitForTimeout(300);
+    const bb2 = (await bar.boundingBox())!;
+    if (bb2.x + bb2.width > label.x + 5 && bb2.x < label.x + label.width - 5) {
+      const px = Math.max(bb2.x, label.x) + 3, py = bb2.y + bb2.height / 2;
+      const onBar = await pa.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest("[data-bar]"), [px, py]);
+      assert(!onBar, "cross item is drawn over the frozen label column");
+    }
     const team1 = (await pa.locator(`[data-team="${T_AZ1}"] > div`).first().boundingBox())!;
     assert(Math.abs(team1.x - team0.x) < 1, `team column moved horizontally ${team0.x}→${team1.x}`);
     await shot(pa, "23-scrolled");
@@ -498,7 +541,7 @@ async function main() {
     const r = await json(admin, "PATCH", `/api/milestones/${m.id}`, { version: m.version, patch: { name: "b" } });
     assert(r.status === 409, `stale milestone update → ${r.status}`);
     assert((await json(admin, "POST", `/api/milestones/${m.id}/restore`)).status === 404, "restore of live milestone allowed");
-    const sp = (await json<{ id: number; version: number }>(admin, "POST", "/api/sprints", { name: `S-${RUN}`, startDate: cw, endDate: addWeeks(cw, 1), teamId: T_AZ1 })).body;
+    const sp = (await json<{ id: number; version: number }>(admin, "POST", "/api/sprints", { name: `S-${RUN}`, startDate: cw, endDate: addWeeks(cw, 1), domainId: AGAM })).body;
     await json(admin, "PATCH", `/api/sprints/${sp.id}`, { version: sp.version, patch: { name: "x" } });
     assert((await json(admin, "PATCH", `/api/sprints/${sp.id}`, { version: sp.version, patch: { name: "y" } })).status === 409, "stale sprint update");
   });
@@ -673,10 +716,293 @@ async function main() {
     assert(await pAdmin.locator(`[data-unit="${moved.id}"] [data-link]`).count() === 1, "moved item has no connector");
     assert(await pAdmin.locator(`[data-unit="${still.id}"] [data-plan]`).count() === 0, "unchanged item shows dashed plan");
     assert(await pAdmin.locator(`[data-unit="${still.id}"] [data-actual]`).count() === 1, "unchanged item not shown");
+    // מצב סופי: רק המצב הנוכחי ותמונות מצב מאוחרות מהמצב ההתחלתי
+    await pAdmin.selectOption("[data-testid=compare-side-a]", String(sOld.id));
+    await pAdmin.waitForTimeout(300);
+    let finals = await pAdmin.locator("[data-testid=compare-side-b] option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+    assert(finals[0] === "live" && finals.includes(String(sNew.id)) && !finals.includes(String(sOld.id)), `final options (initial=old): ${finals}`);
+    await pAdmin.selectOption("[data-testid=compare-side-a]", String(sNew.id));
+    await pAdmin.waitForTimeout(300);
+    finals = await pAdmin.locator("[data-testid=compare-side-b] option").evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+    assert(!finals.includes(String(sOld.id)), `earlier snapshot offered as final state: ${finals}`);
+    // סיום וחזרה לגאנט
+    await pAdmin.click("[data-testid=compare-exit]");
+    await pAdmin.waitForSelector("[data-testid=gantt-view]");
     // תאריך ה-Snapshot ניתן לעריכה
     assert((await json(admin, "PATCH", `/api/snapshots/${sOld.id}`, { asOfDate: "2025-12-01" })).status === 200, "edit asOfDate failed");
     const list = (await json<{ id: number; asOfDate: string }[]>(admin, "GET", "/api/snapshots")).body;
     assert(list.find((s) => s.id === sOld.id)?.asOfDate === "2025-12-01", "asOfDate not updated");
+  });
+
+  // 39 --------------------------------------------------------------
+  await scenario(39, "הגדרות סטטוסים: הוספה, שינוי שם/צבע, מחיקה עם העברה — ומשפיע על הגאנט והמקרא", async () => {
+    assert((await json(A, "POST", "/api/admin/statuses", { label: "x", bg: "#123456", category: "active" })).status === 403, "regular user changed statuses");
+    const label = `בבדיקה-${RUN}`;
+    const { key } = (await json<{ key: string }>(admin, "POST", "/api/admin/statuses", { label, bg: "#8b5cf6", category: "active", noteRecommended: false })).body;
+    assert(key, "status not created");
+    const row = await newRow(admin, T_SYS);
+    const it = (await json<ItemDTO>(admin, "POST", "/api/items", { rowId: row.id, name: `סטטוס-חדש-${RUN}`, startWeek: cw, endWeek: cw, status: key })).body;
+    assert(it.status === key, `item status ${it.status}`);
+    assert((await json(admin, "PATCH", `/api/admin/statuses/${key}`, { label: `${label}-2`, bg: "#0ea5e9" })).status === 200, "rename failed");
+    await pAdmin.goto(`${BASE}/plan?view=gantt`);
+    await pAdmin.waitForSelector(`[data-bar="${it.id}"]`);
+    assert((await pAdmin.locator("[data-testid=legend-statuses]").innerText()).includes(`${label}-2`), "legend not updated");
+    const bg = await pAdmin.locator(`[data-bar="${it.id}"]`).evaluate((el) => getComputedStyle(el).backgroundColor);
+    assert(bg === "rgb(14, 165, 233)", `bar color ${bg}`);
+    // מחיקה בשימוש — חייבים חלופה
+    assert((await json(admin, "DELETE", `/api/admin/statuses/${key}`)).status === 409, "delete in-use without replacement allowed");
+    assert((await json(admin, "DELETE", `/api/admin/statuses/${key}?replaceWith=DONE`)).status === 200, "delete with replacement failed");
+    const moved = (await json<PlanData>(admin, "GET", "/api/plan")).body.items.find((i) => i.id === it.id)!;
+    assert(moved.status === "DONE", `item not moved: ${moved.status}`);
+    const cat = (await json<{ statuses: { key: string; archived: boolean; label: string }[] }>(A, "GET", "/api/catalog")).body;
+    assert(cat.statuses.find((s) => s.key === key)?.archived === true, "deleted status not archived (snapshots need its name)");
+    assert((await json(admin, "POST", "/api/items", { rowId: row.id, name: "x", startWeek: addWeeks(cw, 3), endWeek: addWeeks(cw, 3), status: key })).status === 400, "archived status still usable");
+    assert((await json(admin, "DELETE", "/api/admin/statuses/PLANNED?replaceWith=DONE")).status === 400, "default status deletable");
+  });
+
+  // 40 --------------------------------------------------------------
+  await scenario(40, "תמונות מצב אישיות גלויות רק לבעליהן; משותפות לכולם", async () => {
+    const mine = (await json<{ id: number }>(A, "POST", "/api/snapshots", { name: `אישי-${RUN}`, scope: "personal" })).body;
+    assert(mine.id, "personal snapshot not created");
+    const la = (await json<{ id: number; scope: string; canManage: boolean }[]>(A, "GET", "/api/snapshots")).body;
+    const m = la.find((s) => s.id === mine.id);
+    assert(m?.scope === "personal" && m.canManage, "personal snapshot not listed for owner");
+    assert(la.some((s) => s.scope === "shared" && !s.canManage), "shared snapshots should be visible (read-only) to regular user");
+    for (const [c, who] of [[C, "C"], [admin, "admin"]] as const) {
+      assert(!(await json<{ id: number }[]>(c, "GET", "/api/snapshots")).body.some((s) => s.id === mine.id), `${who} sees A's personal snapshot`);
+      assert((await json(c, "GET", `/api/snapshots/${mine.id}`)).status === 404, `${who} can open A's personal snapshot`);
+      assert((await json(c, "PATCH", `/api/snapshots/${mine.id}`, { name: "hack" })).status === 404, `${who} can rename A's personal snapshot`);
+    }
+    assert((await json(A, "PATCH", `/api/snapshots/${mine.id}`, { name: `אישי-${RUN}-2` })).status === 200, "owner cannot rename");
+    await pa.goto(`${BASE}/snapshots`);
+    await pa.waitForSelector("[data-testid=my-snapshots]");
+    assert((await pa.locator("[data-testid=my-snapshots]").innerText()).includes(`אישי-${RUN}-2`), "personal snapshot not in 'my snapshots' section");
+    assert(!(await pa.locator("[data-testid=shared-snapshots]").innerText()).includes(`אישי-${RUN}`), "personal snapshot shown as shared");
+  });
+
+  // 41 --------------------------------------------------------------
+  await scenario(41, "חיפוש מוצא תכולה ומאתר אותה בגאנט (גלילה והבהוב)", async () => {
+    const row = await newRow(admin, T_SYS);
+    const far = addWeeks(cw, 40);
+    const target = (await json<ItemDTO>(admin, "POST", "/api/items", { rowId: row.id, name: `מחפשים-אותי-${RUN}`, startWeek: far, endWeek: far })).body;
+    await pa.goto(`${BASE}/plan?view=gantt`);
+    await pa.waitForSelector(`[data-bar="${target.id}"]`, { state: "attached" });
+    await pa.waitForTimeout(400);
+    await pa.fill("[data-testid=search]", `מחפשים-אותי-${RUN}`);
+    await pa.waitForSelector(`[data-testid=search-results] [data-result="${target.id}"]`);
+    await pa.keyboard.press("Enter");
+    await pa.waitForTimeout(900);
+    const bar = pa.locator(`[data-bar="${target.id}"]`);
+    assert(await bar.evaluate((el) => el.classList.contains("locate-flash")), "item not highlighted");
+    const bb = (await bar.boundingBox())!;
+    const vp = pa.viewportSize()!;
+    assert(bb.x > 0 && bb.x + bb.width < vp.width && bb.y > 0 && bb.y < vp.height, `item not scrolled into view ${JSON.stringify(bb)}`);
+    await pa.fill("[data-testid=search]", "");
+    await pa.waitForTimeout(800);
+  });
+
+  // 42 --------------------------------------------------------------
+  await scenario(42, "גודל תצוגה אישי (הגדלה) — וסימון טווח בגאנט עדיין מדויק; חלונית ההוספה נסגרת ב-X", async () => {
+    const row = await newRow(A, T_AZ1);
+    await pa.goto(`${BASE}/plan?view=gantt`);
+    await pa.waitForSelector(`[data-lane-row="${row.id}"]`);
+    await pa.click("[data-testid=display-options]");
+    await pa.click("[data-testid=text-size] [data-value=xl]");
+    await pa.keyboard.press("Escape");
+    await pa.waitForTimeout(500);
+    const zoom = await pa.locator("[data-testid=sidebar]").evaluate((el) => getComputedStyle(el.parentElement!).zoom);
+    assert(zoom === "1.25", `zoom is ${zoom}`);
+    await pa.locator("[data-testid=gantt-view]").evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
+    const lb = (await pa.locator(`[data-lane-row="${row.id}"]`).first().boundingBox())!;
+    const wb = (await pa.locator(`[data-week="${cw}"]`).boundingBox())!;
+    const y = lb.y + lb.height / 2, x1 = wb.x + wb.width / 2, x2 = x1 - wb.width * 2;
+    // X סוגר את חלונית ההוספה המהירה
+    await pa.mouse.move(x1, y); await pa.mouse.dblclick(x1, y); // לחיצה כפולה על תא = ישר להוספת תכולה
+    await pa.waitForSelector("[data-testid=quick-create]");
+    await pa.click("[data-testid=quick-close]");
+    assert(!(await pa.locator("[data-testid=quick-create]").count()), "quick-create not closed by X");
+    // סימון 3 שבועות בתצוגה מוגדלת
+    await pa.mouse.move(x1, y); await pa.mouse.down(); await pa.mouse.move((x1 + x2) / 2, y, { steps: 4 }); await pa.mouse.move(x2, y, { steps: 4 }); await pa.mouse.up();
+    await pa.waitForTimeout(500);
+    await pa.click("[data-testid=sel-plus]");
+    await pa.click("[data-testid=sel-add-item]");
+    await pa.waitForSelector("[data-testid=quick-create]");
+    await pa.fill("[data-testid=quick-name]", `זום-${RUN}`);
+    await pa.keyboard.press("Enter");
+    await pa.waitForTimeout(800);
+    const it = (await json<PlanData>(A, "GET", "/api/plan")).body.items.find((i) => i.name === `זום-${RUN}`);
+    assert(it && it.rowId === row.id && it.startWeek === cw && it.endWeek === addWeeks(cw, 2), `wrong placement at zoom: ${JSON.stringify(it)}`);
+    // חזרה לגודל רגיל
+    await pa.click("[data-testid=display-options]");
+    await pa.click("[data-testid=text-size] [data-value=md]");
+    await pa.keyboard.press("Escape");
+  });
+
+  // 43 --------------------------------------------------------------
+  await scenario(43, "תפריט ה-+ (אבן דרך/ספרינט), קליק ימני על אבן דרך וספרינט, וכפתור ההוספה הצף לא זז", async () => {
+    const row = await newRow(admin, T_SYS);
+    const sp = (await json<SprintDTO>(admin, "POST", "/api/sprints", { name: `Sprint ${RUN} 7`, startDate: cw, endDate: addWeeks(cw, 1), domainId: AGAM })).body;
+    const ms = (await json<{ id: number }>(admin, "POST", "/api/milestones", { name: `MS-${RUN}`, date: cw, teamId: T_SYS })).body;
+    await pAdmin.goto(`${BASE}/plan?view=gantt`);
+    await pAdmin.waitForSelector(`[data-lane-row="${row.id}"]`);
+    if ((await pAdmin.getAttribute("[data-testid=toggle-sprints]", "aria-pressed")) !== "true") await pAdmin.click("[data-testid=toggle-sprints]");
+    await pAdmin.waitForTimeout(400);
+    // סימון תא → + → בשורת צוות: תכולה, אבן דרך, ספרינט
+    await pAdmin.locator(`[data-lane-row="${row.id}"]`).first().evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
+    await pAdmin.waitForTimeout(300);
+    const lb = (await pAdmin.locator(`[data-lane-row="${row.id}"]`).first().boundingBox())!;
+    const wb = (await pAdmin.locator(`[data-week="${addWeeks(cw, 3)}"]`).boundingBox())!;
+    await pAdmin.mouse.click(wb.x + wb.width / 2, lb.y + lb.height / 2);
+    await pAdmin.waitForTimeout(500); // לחיצה מהירה מדי על ה-"+" נחשבת לחיצה כפולה (= תכולה)
+    await pAdmin.click("[data-testid=sel-plus]");
+    for (const t of ["sel-add-item", "sel-add-milestone", "sel-add-sprint"]) assert(await pAdmin.locator(`[data-testid=${t}]`).count() === 1, `missing ${t}`);
+    await pAdmin.click("[data-testid=sel-add-sprint]");
+    await pAdmin.waitForSelector("[data-testid=sprint-domain]");
+    assert((await pAdmin.inputValue("[data-testid=sprint-domain]")) === String(plan0.teams.find((t) => t.id === T_SYS)!.domainId), "sprint domain not prefilled from row");
+    await pAdmin.keyboard.press("Escape");
+    // קליק ימני על אבן דרך
+    await pAdmin.locator(`[data-team="${T_SYS}"] [data-marker=milestone]`).first().click({ button: "right" });
+    assert(await pAdmin.getByText("עריכת אבן דרך").count() === 1, "milestone context menu missing");
+    await pAdmin.keyboard.press("Escape");
+    // קליק ימני על לשונית ספרינט → "הספרינט הבא" עם שם ממוספר
+    await pAdmin.locator(`[data-sprint="${sp.id}"] .sprint-tab`).click({ button: "right" });
+    await pAdmin.getByText("הוספת הספרינט הבא").click();
+    await pAdmin.waitForSelector("[data-testid=sprint-domain]");
+    assert((await pAdmin.locator("div[role=dialog] input").first().inputValue()) === `Sprint ${RUN} 8`, "next sprint name not incremented");
+    await pAdmin.keyboard.press("Escape");
+    // כפתור ההוספה הצף לא זז כשהאפשרויות נפתחות
+    const f0 = (await pAdmin.locator("[data-testid=add-fab]").boundingBox())!;
+    await pAdmin.hover("[data-testid=add-fab]");
+    await pAdmin.waitForSelector("[data-testid=add-item]");
+    const f1 = (await pAdmin.locator("[data-testid=add-fab]").boundingBox())!;
+    assert(Math.abs(f0.x - f1.x) < 1 && Math.abs(f0.y - f1.y) < 1, `FAB moved ${JSON.stringify(f0)} → ${JSON.stringify(f1)}`);
+    const order = await pAdmin.locator("[data-testid=add-fab-menu] button[data-testid^=add-]").evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+    assert(JSON.stringify(order.slice(0, 3)) === JSON.stringify(["add-item", "add-milestone", "add-sprint"]), `FAB order ${order}`);
+    await pAdmin.mouse.move(800, 300);
+    void ms;
+  });
+
+  // 44 --------------------------------------------------------------
+  await scenario(44, "תכולות: בלי מידע רוחבי, ID אחרון, מקטעים מתכווצים והסתרה בקליק ימני; סינון לפי הרשאות; חשיפה אחרי הוספה; הקלדה פותחת תכולה", async () => {
+    // סינון ברירת מחדל לפי הרשאות: משתמש חדש עם עריכה לאג"ם רואה רק את אג"ם
+    const E = await ctx(); const uE = `e-${RUN}@test.local`;
+    await json(E, "POST", "/api/auth/register", { fullName: "משתמש ה", email: uE, password: PW, domainIds: [AGAM], requestCross: false });
+    await json(admin, "POST", `/api/admin/users/${await userId(uE)}`, { action: "approve", domainIds: [AGAM], canEditCross: false });
+    const pe = await uiLogin(browser, uE, PW);
+    await pe.goto(`${BASE}/plan?view=gantt`); await pe.waitForSelector("[data-testid=gantt-view]");
+    const doms = await pe.locator("[data-testid=gantt-body] [data-domain]").evaluateAll((els) => els.map((e) => Number((e as HTMLElement).dataset.domain)));
+    assert(doms.length === 1 && doms[0] === AGAM, `default filter by permissions: ${doms}`);
+    // הקלדה כשיש טווח מסומן = הוספת תכולה עם התו שהוקלד
+    const row = (await json<RowDTO>(E, "POST", "/api/rows", { teamId: T_AZ1 })).body;
+    await pe.reload(); await pe.waitForSelector(`[data-lane-row="${row.id}"]`);
+    await pe.locator(`[data-lane-row="${row.id}"]`).first().evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await pe.waitForTimeout(300);
+    const lb = (await pe.locator(`[data-lane-row="${row.id}"]`).first().boundingBox())!;
+    const wb = (await pe.locator(`[data-week="${addWeeks(cw, 5)}"]`).boundingBox())!;
+    await pe.mouse.click(wb.x + wb.width / 2, lb.y + lb.height / 2);
+    await pe.waitForSelector("[data-testid=sel-plus]");
+    // (Playwright מקליד עברית כהדבקת טקסט בלי אירועי מקלדת — לכן אותיות לטיניות, שנשלחות כהקשות אמיתיות)
+    await pe.keyboard.type("Hello", { delay: 60 });
+    await pe.waitForSelector("[data-testid=quick-create]");
+    assert((await pe.inputValue("[data-testid=quick-name]")) === "Hello", `typed name: ${await pe.inputValue("[data-testid=quick-name]")}`);
+    await pe.keyboard.press("Escape");
+    // חשיפה אחרי הוספה: ספרינטים מוסתרים → הוספת ספרינט מציגה אותם
+    assert((await pe.getAttribute("[data-testid=toggle-sprints]", "aria-pressed")) === "false", "sprints should start hidden");
+    await pe.click("[data-testid=add-fab]"); await pe.click("[data-testid=add-sprint]");
+    await pe.fill("div[role=dialog] input >> nth=0", `חשיפה-${RUN}`);
+    await pe.click("div[role=dialog] button.btn-primary");
+    await pe.waitForTimeout(800);
+    assert((await pe.getAttribute("[data-testid=toggle-sprints]", "aria-pressed")) === "true", "sprints not revealed after adding a sprint");
+    // קליק ימני על תחום → הסתרה (בגאנט, אצל המנהל)
+    await pAdmin.goto(`${BASE}/plan?view=gantt`); await pAdmin.waitForSelector(`[data-domain="${ESH}"]`);
+    await pAdmin.locator(`[data-domain-label="${ESH}"]`).click({ button: "right" });
+    await pAdmin.getByText(/הסתרת התחום/).click();
+    await pAdmin.waitForTimeout(300);
+    assert(!(await pAdmin.locator(`[data-testid=gantt-body] [data-domain="${ESH}"]`).count()), "domain not hidden");
+    // טבלה: בלי מידע רוחבי; ID העמודה האחרונה (השמאלית)
+    const holiday = (await json<PlanData>(admin, "GET", "/api/plan")).body.items.find((i) => i.teamId === null)!;
+    await pAdmin.goto(`${BASE}/plan?view=table`); await pAdmin.waitForSelector("[data-testid=table-view]");
+    assert(!(await pAdmin.locator(`[data-item-row="${holiday.id}"]`).count()), "cross item shown in table");
+    const heads = (await pAdmin.locator("thead th").allInnerTexts()).map((h) => h.trim());
+    assert(heads[heads.length - 1] === "ID", `last column is ${heads[heads.length - 1]}`);
+    // כל עמודה מתאימה לכותרת שלה (הכותרות והערכים באותו סדר)
+    const anyItem = (await json<PlanData>(admin, "GET", "/api/plan")).body.items.find((i) => i.teamId !== null)!;
+    const rowEl = pAdmin.locator(`[data-item-row="${anyItem.id}"]`);
+    await rowEl.waitFor();
+    const cells = rowEl.locator("td");
+    assert((await cells.count()) === heads.length, `row has ${await cells.count()} cells, header ${heads.length}`);
+    assert((await cells.nth(heads.indexOf("ID")).innerText()).trim() === String(anyItem.id), "ID column value mismatch");
+    assert((await cells.nth(heads.indexOf("שם התכולה")).innerText()).includes(anyItem.name.slice(0, 5)), "name column value mismatch");
+    assert(await cells.nth(heads.indexOf("סטטוס")).locator(`[data-testid=status-${anyItem.id}]`).count() === 1, "status column mismatch");
+    // מקטע מתכווץ בלחיצה, נשמר אחרי רענון, ונפתח שוב
+    const grp = pAdmin.locator(`[data-group="${T_AZ1}"] button`);
+    const before = await pAdmin.locator("[data-item-row]").count();
+    await grp.click(); await pAdmin.waitForTimeout(800);
+    const after = await pAdmin.locator("[data-item-row]").count();
+    assert(after < before, `group did not collapse (${before} → ${after})`);
+    await pAdmin.reload(); await pAdmin.waitForSelector(`[data-group="${T_AZ1}"]`);
+    assert((await pAdmin.locator("[data-item-row]").count()) === after, "collapse not persisted");
+    await pAdmin.locator(`[data-group="${T_AZ1}"] button`).click();
+    // קליק ימני על מקטע → הסתרת הצוות (משנה את הסינון)
+    await pAdmin.locator(`[data-group="${T_AZ1}"] button`).click({ button: "right" });
+    await pAdmin.locator("[data-testid=group-menu]").getByText(/הסתרת הצוות/).click();
+    await pAdmin.waitForTimeout(300);
+    assert(!(await pAdmin.locator(`[data-group="${T_AZ1}"]`).count()), "team not hidden from table");
+    await pAdmin.getByRole("button", { name: "ניקוי מסננים" }).click();
+    await pe.context().close();
+  });
+
+  // 45 --------------------------------------------------------------
+  await scenario(45, "שחזור תכולה שנמחקה עם אותו ID (גם כשהשורה נמחקה); מנהל עורך Snapshot מהמסך ושומר גרסה", async () => {
+    // שחזור מהחלון "תכולות שנמחקו" — אותו ID
+    const r1 = await newRow(A, T_AZ1);
+    const x = (await json<ItemDTO>(A, "POST", "/api/items", { rowId: r1.id, name: `נמחק-בטעות-${RUN}`, startWeek: addWeeks(cw, 8), endWeek: addWeeks(cw, 8) })).body;
+    assert((await json(A, "DELETE", `/api/items/${x.id}?version=${x.version}`)).status === 200, "delete failed");
+    await pa.goto(`${BASE}/plan?view=table`); await pa.waitForSelector("[data-testid=table-view]");
+    await pa.click("[data-testid=deleted-items]");
+    await pa.waitForSelector(`[data-deleted="${x.id}"]`);
+    await pa.click(`[data-testid=restore-item-${x.id}]`);
+    await pa.waitForTimeout(800);
+    const back = (await json<PlanData>(A, "GET", "/api/plan")).body.items.find((i) => i.id === x.id);
+    assert(back && back.rowId === r1.id, `not restored with same ID/row: ${JSON.stringify(back)}`);
+    await pa.keyboard.press("Escape");
+    // השורה נמחקה יחד עם התכולה → השחזור לשורה אחרת של אותו צוות, עדיין אותו ID
+    const r2 = await newRow(A, T_AZ1);
+    const y = (await json<ItemDTO>(A, "POST", "/api/items", { rowId: r2.id, name: `בשורה-שנמחקה-${RUN}`, startWeek: addWeeks(cw, 9), endWeek: addWeeks(cw, 9) })).body;
+    await json(A, "DELETE", `/api/rows/${r2.id}`);
+    const ry = await json<ItemDTO>(A, "POST", `/api/items/${y.id}/restore`);
+    assert(ry.status === 200 && ry.body.id === y.id && ry.body.rowId !== r2.id && ry.body.teamId === T_AZ1, `restore after row delete: ${ry.status} ${JSON.stringify(ry.body)}`);
+    // משתמש בלי הרשאה לתחום לא יכול לשחזר
+    const eshRow = (await json<RowDTO>(admin, "POST", "/api/rows", { teamId: T_ESH })).body;
+    const z = (await json<ItemDTO>(admin, "POST", "/api/items", { rowId: eshRow.id, name: `אש-${RUN}`, startWeek: addWeeks(cw, 9), endWeek: addWeeks(cw, 9) })).body;
+    await json(admin, "DELETE", `/api/items/${z.id}`);
+    assert((await json(A, "POST", `/api/items/${z.id}/restore`)).status === 403, "user restored item in a domain without permission");
+    const listA = (await json<{ id: number; canRestore: boolean }[]>(A, "GET", "/api/items/deleted")).body;
+    assert(!listA.some((i) => i.id === z.id), "deleted item from a domain without permission is listed");
+    assert(listA.every((i) => i.canRestore), "list contains items the user cannot restore");
+    // עריכת Snapshot ע"י מנהל המערכת: מהבאנר → עורך → שינוי סטטוס בטבלה → שמירה כגרסה חדשה
+    const snap = (await json<{ id: number }>(admin, "POST", "/api/snapshots", { name: `לעריכה-${RUN}` })).body;
+    const sdata = (await json<{ data: PlanData }>(admin, "GET", `/api/snapshots/${snap.id}`)).body.data;
+    const target = sdata.items.find((i) => i.teamId === T_AZ1 && i.status !== "DONE")!;
+    await pAdmin.goto(`${BASE}/plan?view=table&snap=${snap.id}`);
+    await pAdmin.click("[data-testid=banner-edit-snapshot]");
+    await pAdmin.waitForSelector("[data-testid=snapshot-editor-bar]");
+    await pAdmin.getByRole("button", { name: "תכולות" }).first().click();
+    await pAdmin.waitForSelector(`[data-testid=status-${target.id}]`);
+    await pAdmin.selectOption(`[data-testid=status-${target.id}]`, "DONE");
+    await pAdmin.fill("[data-testid=revision-note]", "תיקון בדיקה");
+    await pAdmin.click("[data-testid=save-revision]");
+    await pAdmin.waitForURL(/\/snapshots$/);
+    const revs = (await json<{ revisionNo: number; note: string }[]>(admin, "GET", `/api/snapshots/${snap.id}/revisions`)).body;
+    assert(revs.length === 2 && revs[0].note === "תיקון בדיקה", `revisions: ${JSON.stringify(revs)}`);
+    const after = (await json<{ data: PlanData }>(admin, "GET", `/api/snapshots/${snap.id}`)).body.data;
+    assert(after.items.find((i) => i.id === target.id)?.status === "DONE", "edit not saved in new revision");
+    const orig = (await json<{ data: PlanData }>(admin, "GET", `/api/snapshots/${snap.id}?rev=${(await json<{ id: number; revisionNo: number }[]>(admin, "GET", `/api/snapshots/${snap.id}/revisions`)).body.find((r) => r.revisionNo === 1)!.id}`)).body.data;
+    assert(orig.items.find((i) => i.id === target.id)?.status === target.status, "original revision was modified");
+    // משתמש רגיל לא רואה כפתור עריכה ל-Snapshot משותף
+    await pa.goto(`${BASE}/plan?view=gantt&snap=${snap.id}`);
+    await pa.waitForSelector("[data-testid=snapshot-banner]");
+    assert(!(await pa.locator("[data-testid=banner-edit-snapshot]").count()), "regular user sees edit button on shared snapshot");
   });
 
   await browser.close();

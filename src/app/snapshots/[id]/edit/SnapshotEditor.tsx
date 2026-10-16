@@ -15,6 +15,7 @@ import { WorkspaceUIProvider } from "@/components/plan/ui";
 import { FilterBar } from "@/components/plan/FilterBar";
 import { defaultViewConfig } from "@/components/plan/filters";
 import { currentPrefs } from "@/components/plan/prefs";
+import { locateItem } from "@/components/plan/locate";
 import { GanttView, type GanttHandle } from "@/components/gantt/GanttView";
 import { TableView } from "@/components/table/TableView";
 
@@ -82,12 +83,13 @@ export function SnapshotEditor({ me, id }: { me: Me; id: number }) {
             }}><X size={13} />ביטול</button>
           </div>
         </div>
-        {store.data && <FilterBar data={store.data} view={view} setView={setView} onToday={() => ganttRef.current?.goToday()} mode={mode} />}
+        {store.data && <FilterBar data={store.data} view={view} setView={setView} onToday={() => ganttRef.current?.goToday()} mode={mode}
+          onLocate={(id) => { const msg = locateItem(id, store.data!, view, setView, mode); if (msg) toast.show("info", msg); }} />}
         <main className="relative min-h-0 flex-1">
           {!store.data && q.error && <div className="absolute inset-0 flex items-center justify-center text-red-600">{(q.error as Error).message}</div>}
           {!store.data && !q.error && <div className="absolute inset-0 flex items-center justify-center"><Loader2 className="animate-spin text-ink-400" /></div>}
-          {store.data && mode === "gantt" && <GanttView ref={ganttRef} store={store} view={view} />}
-          {store.data && mode === "table" && <TableView store={store} view={view} me={me} />}
+          {store.data && mode === "gantt" && <GanttView ref={ganttRef} store={store} view={view} setView={setView} />}
+          {store.data && mode === "table" && <TableView store={store} view={view} setView={setView} me={me} />}
         </main>
       </AppShell>
     </WorkspaceUIProvider>

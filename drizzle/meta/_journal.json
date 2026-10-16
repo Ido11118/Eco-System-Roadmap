@@ -22,6 +22,34 @@
       "when": 1792062130154,
       "tag": "0002_snapshot_as_of_date",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792162424596,
+      "tag": "0003_catalog_and_personal_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792163738714,
+      "tag": "0004_sprints_add_domain",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792163739192,
+      "tag": "0005_sprints_drop_team",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792167776858,
+      "tag": "0006_catalog_file_sync",
+      "breakpoints": true
     }
   ]
 }

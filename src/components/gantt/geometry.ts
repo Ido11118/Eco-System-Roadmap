@@ -8,7 +8,6 @@ export const YEAR_H = 22;
 export const MONTH_H = 22;
 export const WEEK_H = 26;
 export const HEADER_H = YEAR_H + MONTH_H + WEEK_H;
-export const SPRINT_LANE_H = 16;
 
 export function geometry(density: ViewConfig["density"], compare = false) {
   const weekW = density === "compact" ? 30 : density === "wide" ? 64 : 42;

@@ -5,7 +5,7 @@ import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef
 import clsx from "clsx";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { PlanData, ViewConfig } from "@/lib/types";
-import { STATUS_META } from "@/lib/constants";
+import { useCatalog } from "@/components/CatalogProvider";
 import {
   buildCompareLayout, summarize, datesChanged, COMPARE_FILTERS, TAG_LABELS, type CompareUnit,
 } from "@/lib/compare";
@@ -24,6 +24,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
 }>(function CompareView({ current, baseline, view, filterKey, onFilterKey, planLabel, actualLabel }, ref) {
   const tip = useTooltip();
   const ui = useWorkspaceUI();
+  const cat = useCatalog();
   const gridRef = useRef<GanttGridHandle>(null);
   const { weekW, rowH, crossLaneH } = geometry(view.density, true);
   const merged = useMemo<PlanData>(() => ({ ...current, items: [...current.items, ...baseline.items] }), [current, baseline]);
@@ -48,9 +49,9 @@ export const CompareView = memo(forwardRef<CompareHandle, {
     domains: [...current.domains, ...baseline.domains.filter((d) => !current.domains.some((c) => c.id === d.id))],
   }), [current, baseline]);
   const teamsVisible = useMemo(() => visibleTeamIds({ ...current, ...structure }, view), [current, structure, view]);
-  const layout = useMemo(() => buildCompareLayout(baseline, current, (u) => cf.match(u) && contentMatch(u)),
-    [baseline, current, cf, view]); // eslint-disable-line react-hooks/exhaustive-deps
-  const allUnits = useMemo(() => buildCompareLayout(baseline, current).units, [baseline, current]);
+  const layout = useMemo(() => buildCompareLayout(baseline, current, (u) => cf.match(u) && contentMatch(u), cat.category),
+    [baseline, current, cf, view, cat]); // eslint-disable-line react-hooks/exhaustive-deps
+  const allUnits = useMemo(() => buildCompareLayout(baseline, current, undefined, cat.category).units, [baseline, current, cat]);
   const summaryUnits = useMemo(() => allUnits.filter((u) =>
     (u.teamId === null || teamsVisible.has(u.teamId)) && contentMatch(u)), [allUnits, teamsVisible, view]); // eslint-disable-line react-hooks/exhaustive-deps
   const summary = useMemo(() => summarize(summaryUnits), [summaryUnits]);
@@ -95,7 +96,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
       <div className="font-semibold">{u.name} <span className="font-normal opacity-70">· ID {u.id}</span></div>
       <div>תוכנן: {u.plan ? `שבועות ${weekNumber(u.plan.start)}–${weekNumber(u.plan.end)} (${fmtDate(u.plan.start)}–${fmtDate(weekEndOf(u.plan.end))})` : "לא היה בתכנון"}</div>
       <div>ביצוע: {u.actual ? `שבועות ${weekNumber(u.actual.start)}–${weekNumber(u.actual.end)} (${fmtDate(u.actual.start)}–${fmtDate(weekEndOf(u.actual.end))})` : "נמחק"}</div>
-      {u.actual && <div>סטטוס: {STATUS_META[u.actual.status].label}{u.plan && u.plan.status !== u.actual.status ? ` (בתכנון: ${STATUS_META[u.plan.status].label})` : ""}</div>}
+      {u.actual && <div>סטטוס: {cat.status(u.actual.status).label}{u.plan && u.plan.status !== u.actual.status ? ` (בתכנון: ${cat.status(u.plan.status).label})` : ""}</div>}
       {u.startDelta !== null && (u.startDelta !== 0 || u.endDelta !== 0) && (
         <div>הפרש: התחלה {fmtDelta(u.startDelta)} · סיום {fmtDelta(u.endDelta!)}</div>
       )}
@@ -122,7 +123,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
       // המצב המתוכנן מוצג רק אם התאריכים השתנו (או שהתכולה נמחקה). תכולה שלא זזה מוצגת כרגיל.
       const pb = u.plan && (changed || deleted) ? box(u.plan.start, u.plan.end) : null;
       const ab = u.actual ? box(u.actual.start, u.actual.end) : null;
-      const m = u.actual ? STATUS_META[u.actual.status] : null;
+      const m = u.actual ? cat.status(u.actual.status) : null;
       const events = {
         onMouseMove: (e: React.MouseEvent) => tip.show(unitTip(u), e, { delay: 600 }),
         onMouseEnter: (e: React.MouseEvent) => hot(e, true),
@@ -207,37 +208,37 @@ function CompareSummaryBar({ summary: s, units, current, filterKey, onFilterKey,
     }).filter((x) => x.s.planned + x.s.added > 0);
   }, [units, current]);
   return (
-    <div className="border-b border-ink-200 bg-white px-4 py-2.5">
-      <div className="flex flex-wrap items-stretch gap-2">
+    <div className="border-b border-ink-200 bg-white px-4 py-1.5">
+      {/* שורה 1: מדדים קומפקטיים (לחיצה = סינון) + פירוק לפי תחום */}
+      <div className="flex flex-wrap items-center gap-1.5">
         {tiles.map((t) => (
-          <button key={t.k} onClick={() => onFilterKey(t.k)} title="סינון לפי מדד זה"
-            className={clsx("min-w-[96px] rounded-lg border px-3 py-1.5 text-start transition hover:border-ink-300",
+          <button key={t.k} onClick={() => onFilterKey(t.k)} title={t.sub ? `${t.label} · ${t.sub} — לחיצה לסינון` : `${t.label} — לחיצה לסינון`}
+            data-tile={t.k}
+            className={clsx("flex h-8 items-baseline gap-1.5 rounded-md border px-2 transition hover:border-ink-300",
               filterKey === t.k ? "border-brand-500 bg-brand-50" : "border-ink-200 bg-white")}>
-            <div className="text-[11px] text-ink-500">{t.label}</div>
-            <div className="text-[19px] font-bold leading-tight tabular-nums" style={{ color: t.color }}>{t.v}</div>
-            {t.sub && <div className="text-[10.5px] text-ink-400">{t.sub}</div>}
+            <span className="self-center text-[15px] font-bold tabular-nums leading-none" style={{ color: t.color }}>{t.v}</span>
+            <span className="self-center text-[12px] text-ink-600">{t.label}</span>
+            {t.sub && <span className="self-center text-[10.5px] text-ink-400">{t.sub}</span>}
           </button>
         ))}
-        <div className="mr-auto flex flex-col justify-between gap-1 text-[11.5px] text-ink-500">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="compare-sides">
-            <span>תכנון: <b className="text-ink-700">{planLabel}</b></span>
-            <span className="text-ink-300">←</span>
-            <span>ביצוע: <b className="text-ink-700">{actualLabel}</b></span>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="flex items-center gap-1.5"><span className="plan-dash inline-block h-3 w-7 rounded-sm" />מיקום מתוכנן (רק אם השתנה)</span>
-            <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-7 rounded-sm border border-amber-600 bg-amber-500" />ביצוע</span>
-            <span className="flex items-center gap-1.5"><span className="rounded bg-brand-600 px-1 text-[9.5px] font-bold text-white">חדש</span>נוסף אחרי התכנון</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <select className="input h-7 w-auto py-0 text-[12px]" value={filterKey} onChange={(e) => onFilterKey(e.target.value)} data-testid="compare-filter">
-              {COMPARE_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-            </select>
-            <button className="btn-ghost btn-sm" onClick={() => setOpen((o) => !o)}>
-              פירוק לפי תחום {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-            </button>
-          </div>
-        </div>
+        <select className="input h-8 w-auto py-0 text-[12px]" value={filterKey} onChange={(e) => onFilterKey(e.target.value)} data-testid="compare-filter" aria-label="סינון לפי סוג שינוי">
+          {COMPARE_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+        </select>
+        <button className="btn-ghost btn-sm" onClick={() => setOpen((o) => !o)}>
+          פירוק לפי תחום {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
+      </div>
+      {/* שורה 2: מה משווים + מקרא — שורה דקה אחת */}
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-ink-500">
+        <span className="flex items-center gap-1.5" data-testid="compare-sides">
+          תכנון: <b className="text-ink-700">{planLabel}</b>
+          <span className="text-ink-300">←</span>
+          ביצוע: <b className="text-ink-700">{actualLabel}</b>
+        </span>
+        <span className="h-3 w-px bg-ink-200" aria-hidden />
+        <span className="flex items-center gap-1.5"><span className="plan-dash inline-block h-2.5 w-6 rounded-sm" />מיקום מתוכנן (רק אם השתנה)</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-6 rounded-sm border border-amber-600 bg-amber-500" />ביצוע</span>
+        <span className="flex items-center gap-1.5"><span className="rounded bg-brand-600 px-1 text-[9.5px] font-bold text-white">חדש</span>נוסף אחרי התכנון</span>
       </div>
       {open && (
         <div className="mt-2.5 overflow-auto rounded-lg border border-ink-200">

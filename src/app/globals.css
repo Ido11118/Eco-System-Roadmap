@@ -88,6 +88,28 @@ body {
 [data-unit].is-hot .plan-link[data-dir="later"]::after { border-right-color: #2563eb; }
 [data-unit].is-hot .plan-link[data-dir="earlier"]::after { border-left-color: #2563eb; }
 [data-unit].is-hot [data-actual] { box-shadow: 0 0 0 2px #2563eb; }
+/* ספרינטים "מולבשים" על בלוק התחום: פס שקוף מתחת לקוביות + לשונית שם על הגבול העליון */
+.sprint-band {
+  background: rgba(20, 184, 166, .075);
+  border-inline: 1px dashed rgba(13, 148, 136, .45);
+}
+.sprint-band[data-alt="1"] { background: rgba(20, 184, 166, .035); }
+.sprint-tab {
+  background: #f0fdfa; color: #0f766e; border: 1px solid #5eead4;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .08);
+}
+.sprint-tab:hover { background: #ccfbf1; border-color: #14b8a6; }
+[data-sprint]:has(.sprint-tab:hover) .sprint-band { background: rgba(20, 184, 166, .14); border-color: rgba(13, 148, 136, .8); }
+/* חיצי גלילה בצדי הגאנט: עדינים, מתחזקים בריחוף על הגאנט */
+.gantt-arrow { opacity: .55; }
+.relative:hover > .gantt-arrow, .gantt-arrow:hover, .gantt-arrow:focus-visible { opacity: 1; }
+/* איתור תכולה מהחיפוש */
+@keyframes locate-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+  20%, 60% { box-shadow: 0 0 0 4px rgba(37, 99, 235, .55), 0 0 18px rgba(37, 99, 235, .45); }
+}
+.locate-flash { animation: locate-pulse 1.2s ease-in-out 2; position: relative; z-index: 26 !important; }
+tr.locate-flash { animation: none; background: #dbeafe !important; transition: background 1.5s; }
 .select-range { background: rgba(37, 99, 235, .14); outline: 1.5px solid rgba(37, 99, 235, .6); }
 .readonly-hatch { background-color: #fcfcfd; }
 .gantt-timeline.readonly-hatch {

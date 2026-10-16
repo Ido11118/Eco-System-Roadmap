@@ -3,12 +3,13 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import {
-  Plus, MoreVertical, Trash2, ArrowUpToLine, ArrowDownToLine, Diamond, Flag, ExternalLink, PanelTopOpen, Pencil, Eye,
+  Plus, MoreVertical, Trash2, ArrowUpToLine, ArrowDownToLine, Diamond, Flag, ExternalLink, PanelTopOpen, Pencil, Eye, EyeOff, X, RectangleHorizontal,
 } from "lucide-react";
 import type { ItemDTO, MilestoneDTO, PlanData, RowDTO, SprintDTO, ViewConfig } from "@/lib/types";
-import { STATUS_META, STATUSES, CROSS_ROW_LABELS, PRIORITY_META } from "@/lib/constants";
+import { CROSS_ROW_LABELS } from "@/lib/constants";
+import { useCatalog } from "@/components/CatalogProvider";
 import {
-  buildTimeline, dayOfWeek, fmtDate, weekEndOf, weekRangeLabel, weekNumber, weekStartOf, daysDiff,
+  buildTimeline, dayOfWeek, fmtDate, addDays, weekEndOf, weekRangeLabel, weekNumber, weekStartOf, daysDiff,
   type ISODate, type Timeline,
 } from "@/lib/weeks";
 import { layoutLanes } from "@/lib/compare";
@@ -16,10 +17,12 @@ import { useTooltip } from "@/components/ui/tooltip";
 import { Floating, MenuItem } from "@/components/ui/popover";
 import { useConfirm } from "@/components/ui/dialog";
 import { findOverlap, type PlanStore } from "@/components/plan/store";
+import { uiZoom } from "@/components/plan/prefs";
 import { useWorkspaceUI, userName } from "@/components/plan/ui";
-import { hasContentFilter, itemMatches, timeWindow, visibleTeamIds } from "@/components/plan/filters";
+import { hasContentFilter, hideDomain, hideTeam, itemMatches, onlyDomain, timeWindow, visibleTeamIds } from "@/components/plan/filters";
+import { useToast } from "@/components/ui/toast";
 import { GanttGrid, useCurrentWeek, type CrossGroup, type GanttGridHandle, type LaneSpec } from "./GanttGrid";
-import { geometry, SPRINT_LANE_H } from "./geometry";
+import { geometry } from "./geometry";
 
 type DragState = {
   item: ItemDTO;
@@ -33,17 +36,21 @@ type DragState = {
   reason?: string;
 };
 type SelState = { rowId: number; laneKey: string; teamId: number | null; a: number; b: number; min: number; max: number };
-type QuickState = { rowId: number; laneKey: string; start: ISODate; end: ISODate; x: number; y: number };
+type QuickState = { rowId: number; laneKey: string; start: ISODate; end: ISODate; x: number; y: number; initialName?: string };
 type SummaryState = { itemId: number; x: number; y: number };
-type MenuState = { x: number; y: number; lane?: LaneSpec; teamId: number | null; week?: ISODate; item?: ItemDTO };
+type MenuState = { x: number; y: number; lane?: LaneSpec; teamId: number | null; week?: ISODate; item?: ItemDTO; milestone?: MilestoneDTO; sprint?: SprintDTO; label?: { domainId: number; teamId: number | null } };
+/** טווח מסומן (לחיצה/גרירה על שורה): מוצג עם "+" באמצע; לחיצה עליו פותחת: תכולה / אבן דרך / ספרינט */
+type PickState = { rowId: number; laneKey: string; teamId: number | null; start: ISODate; end: ISODate; menu?: { x: number; y: number } };
 
 export type GanttHandle = { goToday: () => void };
 
-export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: ViewConfig }>(function GanttView({ store, view }, ref) {
+export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: ViewConfig; setView?: (v: ViewConfig) => void }>(function GanttView({ store, view, setView }, ref) {
   const data = store.data!;
   const ui = useWorkspaceUI();
   const tip = useTooltip();
   const confirm = useConfirm();
+  const cat = useCatalog();
+  const toast = useToast();
   const gridRef = useRef<GanttGridHandle>(null);
   const { weekW, rowH, crossLaneH } = geometry(view.density);
 
@@ -56,6 +63,8 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   const [sel, setSel] = useState<SelState | null>(null);
   const [quick, setQuick] = useState<QuickState | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [pick, setPick] = useState<PickState | null>(null);
+  const lastPick = useRef<{ key: string; at: number } | null>(null); // לזיהוי לחיצה כפולה על אותו תא
   const [summary, setSummary] = useState<SummaryState | null>(null);
   // לחיצה אחת פותחת תקציר, לחיצה כפולה את חלונית העריכה — ממתינים רגע כדי להבחין ביניהן
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -152,7 +161,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     const { data, store } = liveRef.current;
     const dx = d.originX - clientX; // RTL: גרירה שמאלה = מאוחר יותר
     const started = d.started || Math.abs(dx) > 4 || Math.abs(clientY - d.originY) > 4;
-    let dWeeks = Math.round(dx / weekW);
+    let dWeeks = Math.round(dx / (weekW * uiZoom()));
     let targetRowId = d.item.rowId;
     const origRow = data.rows.find((r) => r.id === d.item.rowId);
     if (d.mode === "move" && origRow?.kind === "TEAM") {
@@ -206,15 +215,41 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     };
   }, [drag !== null]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // הטווח המסומן: Escape מבטל, Enter = הוספת תכולה, לחיצה מחוץ לגאנט מבטלת
+  useEffect(() => {
+    if (!pick || pick.menu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).closest("input, textarea, select")) return;
+      if (e.key === "Escape") setPick(null);
+      // התחלת הקלדה כשיש טווח מסומן = הוספת תכולה, והתו הראשון כבר בשם
+      const typed = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " " ? e.key : undefined;
+      if (e.key === "Enter" || typed) {
+        e.preventDefault();
+        const el = document.querySelector<HTMLElement>("[data-testid=sel-plus]")?.getBoundingClientRect();
+        setPick(null);
+        setQuick({ rowId: pick.rowId, laneKey: pick.laneKey, start: pick.start, end: pick.end, x: el ? el.left : 400, y: el ? el.bottom : 300, initialName: typed });
+      }
+    };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest("[data-pick], [data-testid=sel-menu], [data-testid=gantt-scroll]")) setPick(null);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mousedown", onDown); };
+  }, [pick]);
+
   // ---------- סימון טווח ליצירת תכולה ----------
   const selRef = useRef<SelState | null>(null);
   selRef.current = sel;
   const onLaneMouseDown = useCallback((e: React.MouseEvent, lane: LaneSpec, teamId: number | null, wi: number) => {
     if ((e.target as HTMLElement).closest("[data-bar],[data-marker]")) return;
     if (!lane.editable || wi < 0 || wi >= n) return;
+    if (teamId !== null && view.showItems === false) return; // שכבת התכולות מוסתרת — לא יוצרים תכולה "בלתי נראית"
     (document.activeElement as HTMLElement | null)?.blur?.(); // שומר עריכה פתוחה בחלונית לפני הפעולה
     e.preventDefault();
     setQuick(null);
+    setPick(null);
     // גבולות: לא לחצות תכולה קיימת באותה שורה (בשורות צוות)
     const row = data.rows.find((r) => r.id === lane.rowId);
     let min = 0, max = n - 1;
@@ -230,7 +265,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     setSel({ rowId: lane.rowId, laneKey: lane.key, teamId, a: wi, b: wi, min, max });
     const onMove = (ev: MouseEvent) => {
       const r = el.getBoundingClientRect();
-      const w = Math.floor((r.right - ev.clientX) / weekW);
+      const w = Math.floor((r.right - ev.clientX) / (weekW * uiZoom()));
       setSel((s) => (s ? { ...s, b: Math.max(s.min, Math.min(s.max, w)) } : s));
     };
     const onUp = (ev: MouseEvent) => {
@@ -240,11 +275,17 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
       setSel(null);
       if (!s) return;
       const lo = Math.min(s.a, s.b), hi = Math.max(s.a, s.b);
-      setQuick({ rowId: s.rowId, laneKey: s.laneKey, start: timeline.weeks[lo].start, end: timeline.weeks[hi].start, x: ev.clientX, y: ev.clientY });
+      const start = timeline.weeks[lo].start, end = timeline.weeks[hi].start;
+      // לחיצה כפולה על אותו תא = קיצור דרך: ישר להוספת תכולה
+      const key = `${s.laneKey}|${start}|${end}`;
+      const dbl = lo === hi && lastPick.current?.key === key && Date.now() - lastPick.current.at < 450;
+      lastPick.current = { key, at: Date.now() };
+      if (dbl) { setPick(null); setQuick({ rowId: s.rowId, laneKey: s.laneKey, start, end, x: ev.clientX, y: ev.clientY }); return; }
+      setPick({ rowId: s.rowId, laneKey: s.laneKey, teamId: s.teamId, start, end });
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-  }, [data.rows, itemsByRow, idxOf, n, timeline, weekW]);
+  }, [data.rows, itemsByRow, idxOf, n, timeline, weekW, view.showItems]);
 
   const onLaneContextMenu = useCallback((e: React.MouseEvent, lane: LaneSpec, teamId: number | null, wi: number) => {
     const barEl = (e.target as HTMLElement).closest<HTMLElement>("[data-bar]");
@@ -256,6 +297,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   const startDrag = (e: React.MouseEvent, item: ItemDTO, mode: DragState["mode"], editable: boolean) => {
     if (e.button !== 0) return;
     e.stopPropagation();
+    setPick(null);
     (document.activeElement as HTMLElement | null)?.blur?.();
     e.preventDefault();
     tip.hide();
@@ -266,7 +308,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   const itemTip = (i: ItemDTO) => (
     <div className="space-y-0.5">
       <div className="font-semibold">{i.name}</div>
-      <div className="opacity-80">ID {i.id} · {STATUS_META[i.status].label}{i.priority !== "NONE" ? ` · תיעדוף ${PRIORITY_META[i.priority].label}` : ""}</div>
+      <div className="opacity-80">ID {i.id} · {cat.status(i.status).label}{i.priority !== cat.defaultPriority ? ` · תיעדוף ${cat.priority(i.priority).label}` : ""}</div>
       <div className="opacity-80">שבועות {weekNumber(i.startWeek)}–{weekNumber(i.endWeek)} · {fmtDate(i.startWeek)}–{fmtDate(weekEndOf(i.endWeek))}</div>
       {i.notes && <div className="max-w-[300px] truncate opacity-70">{i.notes}</div>}
       <div className="opacity-60">עודכן ע״י {userName(data, i.updatedById)}</div>
@@ -276,7 +318,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   const renderBar = (i: ItemDTO, editable: boolean, height: number, opts?: { ghost?: boolean; start?: ISODate; end?: ISODate; invalid?: boolean }) => {
     const box = barBox(opts?.start ?? i.startWeek, opts?.end ?? i.endWeek);
     if (!box) return null;
-    const m = STATUS_META[i.status];
+    const m = cat.status(i.status);
     const dim = filtering && !matches(i);
     const isDragged = drag?.started && drag.item.id === i.id && !opts?.ghost;
     const selected = ui.selectedItemId === i.id;
@@ -299,7 +341,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         onClick={editable ? undefined : (e) => openSummary(i, e.clientX, e.clientY)}
         onDoubleClick={() => openFull(i.id)}
         role={opts?.ghost ? undefined : "button"} tabIndex={opts?.ghost ? undefined : 0}
-        aria-label={opts?.ghost ? undefined : `${i.name}, ${STATUS_META[i.status].label}, שבועות ${weekNumber(i.startWeek)}–${weekNumber(i.endWeek)}`}
+        aria-label={opts?.ghost ? undefined : `${i.name}, ${cat.status(i.status).label}, שבועות ${weekNumber(i.startWeek)}–${weekNumber(i.endWeek)}`}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ui.openItem(i.id); } }}>
         {/* ידיות שינוי אורך — לא בקצה שנחתך ע"י חלון הזמן (הקצה האמיתי מחוץ לתצוגה) */}
         {editable && !opts?.ghost && !box.cutStart && (
@@ -315,7 +357,8 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
 
   const renderLane = (lane: LaneSpec, teamId: number | null) => {
     const row = data.rows.find((r) => r.id === lane.rowId);
-    const items = teamId === null ? crossLayout.laneItems.get(lane.key) ?? [] : itemsByRow.get(lane.rowId) ?? [];
+    // שכבת התכולות ניתנת להסתרה (שורות הצוותים בלבד — המידע הרוחבי תמיד מוצג)
+    const items = teamId === null ? crossLayout.laneItems.get(lane.key) ?? [] : view.showItems === false ? [] : itemsByRow.get(lane.rowId) ?? [];
     const editable = lane.editable;
     const out: React.ReactNode[] = items.map((i) => renderBar(i, editable && store.canEditRow(row), lane.height));
     if (sel && sel.laneKey === lane.key) {
@@ -325,6 +368,28 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     if (quick && quick.laneKey === lane.key) {
       const lo = idxOf(quick.start), hi = idxOf(quick.end);
       out.push(<div key="q" className="select-range pointer-events-none absolute z-20 rounded" style={{ right: lo * weekW + 1, width: (hi - lo + 1) * weekW - 2, top: 3, height: lane.height - 6 }} />);
+    }
+    if (pick && pick.laneKey === lane.key) {
+      const lo = idxOf(pick.start), hi = idxOf(pick.end);
+      const sz = Math.min(22, lane.height - 6);
+      out.push(<div key="p" data-pick className="select-range pointer-events-none absolute z-20 rounded" style={{ right: lo * weekW + 1, width: (hi - lo + 1) * weekW - 2, top: 3, height: lane.height - 6 }} />);
+      out.push(
+        <button key="p+" data-pick data-testid="sel-plus" aria-label="הוספה בטווח המסומן" title="הוספה (תכולה / אבן דרך / ספרינט) · לחיצה כפולה על תא = תכולה"
+          className="anim-in absolute z-[22] flex items-center justify-center rounded-full bg-brand-600 text-white shadow-pop transition hover:scale-110 hover:bg-brand-700"
+          style={{ right: ((lo + hi + 1) / 2) * weekW - sz / 2, top: (lane.height - sz) / 2, width: sz, height: sz }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            // ה-"+" מופיע בדיוק מתחת לסמן: לחיצה מהירה עליו מיד אחרי הסימון = לחיצה כפולה על התא → ישר להוספת תכולה
+            if (lastPick.current && Date.now() - lastPick.current.at < 400) {
+              const p = pick; setPick(null); lastPick.current = null;
+              setQuick({ rowId: p.rowId, laneKey: p.laneKey, start: p.start, end: p.end, x: e.clientX, y: e.clientY });
+              return;
+            }
+            const r = e.currentTarget.getBoundingClientRect(); setPick((p) => (p ? { ...p, menu: { x: r.left + r.width / 2, y: r.bottom } } : p));
+          }}>
+          <Plus size={Math.round(sz * 0.65)} />
+        </button>,
+      );
     }
     const ghostHere = drag?.started && drag.targetRowId === lane.rowId &&
       (teamId === null ? (crossLayout.laneItems.get(lane.key) ?? []).some((i) => i.id === drag.item.id) : lane.isRowStart);
@@ -349,7 +414,8 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         style={{ right: dateX(m.date), top: h / 2 }}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => ui.openMilestone(m)}
-        onMouseMove={(e) => tip.show(<div><div className="font-semibold">◆ {m.name}</div><div className="opacity-80">{fmtDate(m.date)}{m.teamId === null ? " · רוחבי" : ""}</div>{m.notes && <div className="opacity-70">{m.notes}</div>}</div>, e)}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); tip.hide(); setMenu({ x: e.clientX, y: e.clientY, teamId: m.teamId, milestone: m }); }}
+        onMouseMove={(e) => tip.show(<div><div className="font-semibold">◆ {m.name}</div><div className="opacity-80">{fmtDate(m.date)}{m.teamId === null ? " · רוחבי" : ""}</div>{m.notes && <div className="opacity-70">{m.notes}</div>}</div>, e, { delay: 600, anchor: e.currentTarget })}
         onMouseLeave={tip.hide} aria-label={`אבן דרך: ${m.name}`}>
         <span className="block h-3 w-3 rotate-45 rounded-[2px] border-2 border-white bg-violet-600 shadow" />
       </button>
@@ -370,14 +436,13 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
       {(msByTeam.get(teamId) ?? []).map((m) => {
         const wi = idxOf(weekStartOf(m.date));
         if (wi < 0 || wi >= n) return null;
-        return (
-          <div key={m.id}>
-            <div className="absolute w-0 border-r border-dashed border-violet-400/70" style={{ right: dateX(m.date), top: 0, height }} />
-            {renderMilestone(m, 10)}
-          </div>
-        );
+        return <div key={m.id} className="absolute w-0 border-r border-dashed border-violet-400/70" style={{ right: dateX(m.date), top: 0, height }} />;
       })}
     </>
+  ) : undefined;
+  // סמני אבני הדרך עצמם — בשכבה מעל הקוביות, כדי שקובייה באותו שבוע לא תסתיר אותם
+  const renderTeamMarkers = view.showMilestones ? (teamId: number) => (
+    <>{(msByTeam.get(teamId) ?? []).map((m) => renderMilestone(m, 10))}</>
   ) : undefined;
 
   const renderBodyOverlay = view.showMilestones ? () => (
@@ -390,39 +455,44 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     </>
   ) : undefined;
 
-  const sprintsByTeam = useMemo(() => {
+  const sprintsByDomain = useMemo(() => {
     const m = new Map<number, SprintDTO[]>();
     for (const s of data.sprints) {
-      if (!m.has(s.teamId)) m.set(s.teamId, []);
-      m.get(s.teamId)!.push(s);
+      if (!m.has(s.domainId)) m.set(s.domainId, []);
+      m.get(s.domainId)!.push(s);
     }
+    for (const arr of m.values()) arr.sort((a, b) => a.startDate.localeCompare(b.startDate));
     return m;
   }, [data.sprints]);
 
-  const teamFooter = view.showSprints ? (teamId: number) => {
-    const list = sprintsByTeam.get(teamId) ?? [];
-    const lanes = layoutLanes(list, [0], () => 0, (s) => [[idxOf(weekStartOf(s.startDate)), idxOf(weekStartOf(s.endDate))]], (s) => s.id);
-    const h = Math.max(1, lanes.length) * SPRINT_LANE_H + 2;
-    return {
-      height: h,
-      node: (
-        <>
-          {lanes.flatMap((l) => l.units.map((s) => {
-            const x0 = dateX(s.startDate) - (weekW / 7) / 2, x1 = dateX(s.endDate) + (weekW / 7) / 2;
-            if (x1 < 0 || x0 > n * weekW) return null;
-            return (
-              <button key={s.id} className="absolute flex items-center overflow-hidden rounded-sm border border-teal-300 bg-teal-50 px-1 text-[10px] font-medium text-teal-800 hover:bg-teal-100"
-                style={{ right: Math.max(0, x0), width: Math.max(8, x1 - Math.max(0, x0)), top: 1 + l.laneIndex * SPRINT_LANE_H, height: SPRINT_LANE_H - 2 }}
-                onClick={() => ui.openSprint(s)}
-                onMouseMove={(e) => tip.show(<div><div className="font-semibold">{s.name}</div><div className="opacity-80">{fmtDate(s.startDate)} – {fmtDate(s.endDate)}</div></div>, e)}
-                onMouseLeave={tip.hide}>
-                <span className="truncate">{s.name}</span>
-              </button>
-            );
-          }))}
-        </>
-      ),
-    };
+  // ספרינטים "מולבשים" על בלוק התחום: פס שקוף עדין לאורך כל הצוותים בתחום (מתחת לקוביות),
+  // קווים מקווקווים בתחילת הספרינט ובסופו, ולשונית שם קטנה היושבת על הגבול העליון של התחום.
+  // ספרינטים עוקבים מתחלפים בעוצמת הגוון — כך רואים היכן אחד נגמר והבא מתחיל.
+  const dayW = weekW / 7;
+  const renderDomainOverlay = view.showSprints ? (domainId: number) => {
+    const list = sprintsByDomain.get(domainId) ?? [];
+    if (!list.length) return null;
+    const dayStart = (d: ISODate) => idxOf(weekStartOf(d)) * weekW + dayOfWeek(d) * dayW; // קצה ימני (תחילת היום) ב-RTL
+    const lanes = layoutLanes(list, [0], () => 0, (s) => [[idxOf(weekStartOf(s.startDate)) * 7 + dayOfWeek(s.startDate), idxOf(weekStartOf(s.endDate)) * 7 + dayOfWeek(s.endDate)]], (s) => s.id);
+    const laneOf = new Map(lanes.flatMap((l) => l.units.map((s) => [s.id, l.laneIndex] as const)));
+    return list.map((s, i) => {
+      const x0 = dayStart(s.startDate), x1 = dayStart(s.endDate) + dayW;
+      if (x1 <= 0 || x0 >= n * weekW) return null;
+      const right = Math.max(0, x0), width = Math.min(n * weekW, x1) - right;
+      const showTip = (e: React.MouseEvent) => tip.show(
+        <div><div className="font-semibold">{s.name}</div><div className="opacity-80">{fmtDate(s.startDate)} – {fmtDate(s.endDate)} · {data.domains.find((d) => d.id === domainId)?.name}</div>{s.notes && <div className="opacity-70">{s.notes}</div>}</div>, e, { delay: 600, anchor: e.currentTarget });
+      return (
+        <div key={s.id} data-sprint={s.id}>
+          <div className="sprint-band absolute inset-y-0" data-alt={i % 2 ? "1" : "0"} style={{ right, width }} />
+          <button className="sprint-tab pointer-events-auto absolute z-[12] flex h-[15px] items-center gap-1 rounded-full px-1.5 text-[10px] font-semibold leading-none"
+            style={{ right: right + 3, top: -8 + (laneOf.get(s.id) ?? 0) * 16, maxWidth: Math.max(130, width - 6) }}
+            onClick={() => ui.openSprint(s)} onMouseMove={showTip} onMouseLeave={tip.hide}
+            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); tip.hide(); setMenu({ x: e.clientX, y: e.clientY, teamId: null, sprint: s }); }} aria-label={`ספרינט ${s.name}`}>
+            <Flag size={9} className="shrink-0" /><span className="truncate">{s.name}</span>
+          </button>
+        </div>
+      );
+    });
   } : undefined;
 
   const rowMenu = (lane: LaneSpec, teamId: number, x: number, y: number) => setMenu({ x, y, lane, teamId });
@@ -457,10 +527,11 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     <div className="relative h-full" data-testid="gantt-view">
       <GanttGrid ref={gridRef} timeline={timeline} weekW={weekW} domains={data.domains} teams={teams}
         teamLanes={teamLanes} crossGroups={crossLayout.groups} todayIndex={todayIndex}
-        renderLane={renderLane} renderTeamOverlay={renderTeamOverlay} renderBodyOverlay={renderBodyOverlay}
-        teamFooter={teamFooter} renderRowControl={renderRowControl} teamLabelExtra={teamLabelExtra}
+        renderLane={renderLane} renderTeamOverlay={renderTeamOverlay} renderTeamMarkers={renderTeamMarkers} renderBodyOverlay={renderBodyOverlay}
+        renderDomainOverlay={renderDomainOverlay} renderRowControl={renderRowControl} teamLabelExtra={teamLabelExtra}
         teamEditable={(t) => store.canEditTeam(t)}
-        onLaneMouseDown={store.readOnly ? undefined : onLaneMouseDown} onLaneContextMenu={onLaneContextMenu} />
+        onLaneMouseDown={store.readOnly ? undefined : onLaneMouseDown} onLaneContextMenu={onLaneContextMenu}
+        onLabelContextMenu={setView ? (e, domainId, teamId) => setMenu({ x: e.clientX, y: e.clientY, teamId, label: { domainId, teamId } }) : undefined} />
 
       {drag?.started && !drag.valid && drag.reason && (
         <div className="pointer-events-none fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-md bg-red-600 px-3 py-1.5 text-[12px] text-white shadow-pop">{drag.reason}</div>
@@ -481,10 +552,51 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
       {quick && <QuickCreate quick={quick} store={store} onClose={() => setQuick(null)}
         onMore={(name) => { const q = quick; setQuick(null); ui.openNewItem({ rowId: q.rowId, startWeek: q.start, endWeek: q.end, name }); }} />}
 
+      <Floating open={!!pick?.menu} point={pick?.menu} onClose={() => setPick((p) => (p ? { ...p, menu: undefined } : p))}>
+        {pick?.menu && (() => {
+          const teamDomain = pick.teamId !== null ? data.teams.find((t) => t.id === pick.teamId)?.domainId : undefined;
+          const canMs = pick.teamId === null ? store.canEditCross() : store.canEditTeam(pick.teamId);
+          const canSprint = teamDomain !== undefined && store.canEditDomain(teamDomain);
+          const range = pick.start === pick.end ? `שבוע ${weekNumber(pick.start)}` : `שבועות ${weekNumber(pick.start)}–${weekNumber(pick.end)}`;
+          const go = (fn: () => void) => { setPick(null); fn(); };
+          return (
+            <div className="w-[220px] p-1.5" data-testid="sel-menu">
+              <div className="px-2 pb-1.5 pt-0.5 text-[11px] text-ink-400">
+                <div className="font-medium text-ink-500">{range}</div>
+                <div dir="ltr" className="text-right tabular-nums">{fmtDate(pick.start)} – {fmtDate(weekEndOf(pick.end))}</div>
+              </div>
+              <PickOption color="bg-brand-600" icon={<RectangleHorizontal size={14} />} label="תכולה" testid="sel-add-item"
+                onClick={() => go(() => setQuick({ rowId: pick.rowId, laneKey: pick.laneKey, start: pick.start, end: pick.end, x: pick.menu!.x, y: pick.menu!.y }))} />
+              {canMs && <PickOption color="bg-violet-600" icon={<Diamond size={13} />} label={pick.teamId === null ? "אבן דרך רוחבית" : "אבן דרך"} testid="sel-add-milestone"
+                onClick={() => go(() => ui.openMilestone(null, { teamId: pick.teamId, date: pick.start }))} />}
+              {canSprint && <PickOption color="bg-teal-600" icon={<Flag size={13} />} label="ספרינט לתחום" testid="sel-add-sprint"
+                onClick={() => go(() => ui.openSprint(null, { domainId: teamDomain!, startDate: pick.start, endDate: addDays(weekEndOf(pick.end), -2) }))} />}
+            </div>
+          );
+        })()}
+      </Floating>
+
       <Floating open={!!menu} point={menu ? { x: menu.x, y: menu.y } : undefined} onClose={() => setMenu(null)}>
         {menu && (
           <div className="w-[230px] p-1" onClick={() => setMenu(null)}>
-            {menu.item ? (
+            {menu.label && setView ? (
+              <LabelMenu label={menu.label} data={data} view={view} setView={setView} toast={toast} />
+            ) : menu.milestone ? (() => {
+              const m = menu.milestone;
+              const ed = m.teamId === null ? store.canEditCross() : store.canEditTeam(m.teamId);
+              return (
+                <>
+                  <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-violet-700">◆ {m.name} · {fmtDate(m.date)}</div>
+                  <MenuItem icon={ed ? <Pencil size={14} /> : <ExternalLink size={14} />} onClick={() => ui.openMilestone(m)}>{ed ? "עריכת אבן דרך" : "פרטי אבן דרך"}</MenuItem>
+                  {ed && <MenuItem danger icon={<Trash2 size={14} />} onClick={async () => {
+                    if (await confirm({ title: "מחיקת אבן דרך", text: `למחוק את "${m.name}"?`, confirm: "מחיקה", danger: true })) await store.deleteMilestone(m);
+                  }}>מחיקת אבן דרך</MenuItem>}
+                </>
+              );
+            })() : menu.sprint ? (
+              <SprintMenu sprint={menu.sprint} store={store} onEdit={(sp) => ui.openSprint(sp)}
+                onNext={(pre) => ui.openSprint(null, pre)} confirm={confirm} />
+            ) : menu.item ? (
               <>
                 <MenuItem icon={<ExternalLink size={14} />} onClick={() => ui.openItem(menu.item!.id)}>פתח פרטי תכולה</MenuItem>
                 {store.canEditRow(data.rows.find((r) => r.id === menu.item!.rowId)) && (
@@ -492,11 +604,11 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
                     <div className="my-1 border-t border-ink-100" />
                     <div className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold text-ink-400">שינוי סטטוס</div>
                     <div className="grid grid-cols-2 gap-0.5 px-1">
-                      {STATUSES.map((s) => (
+                      {cat.statuses.map(({ key: s }) => (
                         <button key={s} onClick={() => void store.updateItem(menu.item!, { status: s })}
                           className={clsx("flex items-center gap-1.5 rounded px-1.5 py-1 text-start text-[12px] hover:bg-ink-100", menu.item!.status === s && "bg-ink-100 font-semibold")}>
-                          <span className="h-2.5 w-2.5 shrink-0 rounded-sm border" style={{ background: STATUS_META[s].bg, borderColor: STATUS_META[s].border }} />
-                          <span className="truncate">{STATUS_META[s].label}</span>
+                          <span className="h-2.5 w-2.5 shrink-0 rounded-sm border" style={{ background: cat.status(s).bg, borderColor: cat.status(s).border }} />
+                          <span className="truncate">{cat.status(s).label}</span>
                         </button>
                       ))}
                     </div>
@@ -515,9 +627,12 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
                 {menu.week && (menu.teamId === null ? store.canEditCross() : store.canEditTeam(menu.teamId)) && view.showMilestones && (
                   <MenuItem icon={<Diamond size={14} />} onClick={() => ui.openMilestone(null, { teamId: menu.teamId, date: menu.week })}>הוסף אבן דרך כאן</MenuItem>
                 )}
-                {menu.teamId !== null && store.canEditTeam(menu.teamId) && (
-                  <MenuItem icon={<Flag size={14} />} onClick={() => ui.openSprint(null, { teamId: menu.teamId!, startDate: menu.week })}>הוסף ספרינט</MenuItem>
-                )}
+                {(() => {
+                  const domainId = menu.teamId !== null ? data.teams.find((t) => t.id === menu.teamId)?.domainId : undefined;
+                  return domainId !== undefined && store.canEditDomain(domainId) ? (
+                    <MenuItem icon={<Flag size={14} />} onClick={() => ui.openSprint(null, { domainId, startDate: menu.week })}>הוסף ספרינט לתחום</MenuItem>
+                  ) : null;
+                })()}
                 {menu.teamId !== null && menu.lane?.editable && (
                   <>
                     <div className="my-1 border-t border-ink-100" />
@@ -527,6 +642,16 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
                   </>
                 )}
                 {!menu.lane?.editable && <div className="px-2.5 py-1.5 text-[12px] text-ink-400">אין הרשאת עריכה לאזור זה</div>}
+                {view.showSprints && menu.week && menu.teamId !== null && (() => {
+                  const dom = data.teams.find((t) => t.id === menu.teamId)?.domainId;
+                  const sp = (sprintsByDomain.get(dom ?? -1) ?? []).find((x) => x.startDate <= weekEndOf(menu.week!) && x.endDate >= menu.week!);
+                  return sp ? (
+                    <>
+                      <div className="my-1 border-t border-ink-100" />
+                      <SprintMenu sprint={sp} store={store} onEdit={(s2) => ui.openSprint(s2)} onNext={(pre) => ui.openSprint(null, pre)} confirm={confirm} />
+                    </>
+                  ) : null;
+                })()}
               </>
             )}
           </div>
@@ -535,6 +660,65 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     </div>
   );
 }));
+
+/** קליק ימני על שם תחום/צוות: הסתרה מהתצוגה (משנה את הסינון) */
+export function LabelMenu({ label, data, view, setView, toast }: {
+  label: { domainId: number; teamId: number | null }; data: PlanData; view: ViewConfig; setView: (v: ViewConfig) => void;
+  toast: ReturnType<typeof useToast>;
+}) {
+  const dom = data.domains.find((d) => d.id === label.domainId);
+  const team = label.teamId !== null ? data.teams.find((t) => t.id === label.teamId) : undefined;
+  const apply = (v: ViewConfig | null, what: string) => {
+    if (!v) { toast.show("error", `לא ניתן להסתיר את ה${what} האחרון שמוצג`); return; }
+    setView(v);
+  };
+  const filtered = view.domainIds.length > 0 || view.teamIds.length > 0;
+  return (
+    <>
+      <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-ink-500">{dom?.name}{team && team.name !== dom?.name ? ` / ${team.name}` : ""}</div>
+      {team && <MenuItem icon={<EyeOff size={14} />} onClick={() => apply(hideTeam(view, data, team.id), "צוות")}>הסתרת הצוות &quot;{team.name}&quot;</MenuItem>}
+      <MenuItem icon={<EyeOff size={14} />} onClick={() => apply(hideDomain(view, data, label.domainId), "תחום")}>הסתרת התחום &quot;{dom?.name}&quot;</MenuItem>
+      <MenuItem icon={<Eye size={14} />} onClick={() => setView(onlyDomain(view, label.domainId))}>הצגת התחום הזה בלבד</MenuItem>
+      {filtered && <MenuItem icon={<Eye size={14} />} onClick={() => setView({ ...view, domainIds: [], teamIds: [] })}>הצגת כל התחומים והצוותים</MenuItem>}
+    </>
+  );
+}
+
+function PickOption({ color, icon, label, onClick, testid }: { color: string; icon: React.ReactNode; label: string; onClick: () => void; testid: string }) {
+  return (
+    <button onClick={onClick} data-testid={testid} className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-start text-[13px] text-ink-800 hover:bg-ink-100">
+      <span className={clsx("flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white", color)}>{icon}</span>
+      הוספת {label}
+    </button>
+  );
+}
+
+/** "הספרינט הבא": מתחיל ביום ראשון שאחרי סיום הספרינט, באותו אורך, והמספר בשם עולה ב-1 */
+export function nextSprintPrefill(s: SprintDTO) {
+  const len = daysDiff(s.startDate, s.endDate);
+  let start = addDays(s.endDate, 1);
+  if (dayOfWeek(start) !== 0) start = addDays(weekStartOf(start), 7);
+  const m = s.name.match(/^(.*?)(\d+)(\D*)$/);
+  const name = m ? `${m[1]}${Number(m[2]) + 1}${m[3]}` : `${s.name} (הבא)`;
+  return { domainId: s.domainId, startDate: start, endDate: addDays(start, len), name };
+}
+
+function SprintMenu({ sprint: s, store, onEdit, onNext, confirm }: {
+  sprint: SprintDTO; store: PlanStore; onEdit: (s: SprintDTO) => void;
+  onNext: (pre: ReturnType<typeof nextSprintPrefill>) => void; confirm: ReturnType<typeof useConfirm>;
+}) {
+  const ed = store.canEditDomain(s.domainId);
+  return (
+    <>
+      <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-teal-700">⚑ {s.name} · {fmtDate(s.startDate)}–{fmtDate(s.endDate)}</div>
+      <MenuItem icon={ed ? <Pencil size={14} /> : <ExternalLink size={14} />} onClick={() => onEdit(s)}>{ed ? "עריכת ספרינט" : "פרטי ספרינט"}</MenuItem>
+      {ed && <MenuItem icon={<Plus size={14} />} onClick={() => onNext(nextSprintPrefill(s))}>הוספת הספרינט הבא</MenuItem>}
+      {ed && <MenuItem danger icon={<Trash2 size={14} />} onClick={async () => {
+        if (await confirm({ title: "מחיקת ספרינט", text: `למחוק את "${s.name}"?`, confirm: "מחיקה", danger: true })) await store.deleteSprint(s);
+      }}>מחיקת ספרינט</MenuItem>}
+    </>
+  );
+}
 
 export function dragRange(item: ItemDTO, mode: DragState["mode"], d: number): { start: ISODate; end: ISODate } {
   const add = (s: ISODate, w: number) => {
@@ -549,16 +733,18 @@ export function dragRange(item: ItemDTO, mode: DragState["mode"], d: number): { 
 function ItemSummary({ item, data, point, editable, onClose, onOpen }: {
   item: ItemDTO; data: PlanData; point: { x: number; y: number }; editable: boolean; onClose: () => void; onOpen: () => void;
 }) {
-  const m = STATUS_META[item.status];
+  const cat = useCatalog();
+  const m = cat.status(item.status);
   return (
     <Floating open point={point} onClose={onClose}>
-      <div className="w-[300px] p-3 text-[12.5px]" data-testid="item-summary">
-        <div className="mb-1.5 flex items-start gap-2">
+      <div className="relative w-[300px] p-3 text-[12.5px]" data-testid="item-summary">
+        <button className="icon-btn absolute left-1.5 top-1.5 h-6 w-6" onClick={onClose} aria-label="סגירה" title="סגירה (Esc)"><X size={14} /></button>
+        <div className="mb-1.5 flex items-start gap-2 pl-6">
           <span className="mt-1 h-3 w-3 shrink-0 rounded-sm border" style={{ background: m.bg, borderColor: m.border }} />
           <div className="font-semibold leading-snug text-ink-900">{item.name}</div>
         </div>
         <div className="space-y-0.5 text-ink-600">
-          <div>ID {item.id} · {m.label}{item.priority !== "NONE" ? ` · תיעדוף ${PRIORITY_META[item.priority].label}` : ""}</div>
+          <div>ID {item.id} · {m.label}{item.priority !== cat.defaultPriority ? ` · תיעדוף ${cat.priority(item.priority).label}` : ""}</div>
           <div className="tabular-nums">שבועות {weekNumber(item.startWeek)}–{weekNumber(item.endWeek)} · {fmtDate(item.startWeek)}–{fmtDate(weekEndOf(item.endWeek))}</div>
           {item.notes && <div className="line-clamp-3 whitespace-pre-line text-ink-500">{item.notes}</div>}
           <div className="text-ink-400">עודכן ע״י {userName(data, item.updatedById)}</div>
@@ -575,7 +761,7 @@ function ItemSummary({ item, data, point, editable, onClose, onOpen }: {
 }
 
 function QuickCreate({ quick, store, onClose, onMore }: { quick: QuickState; store: PlanStore; onClose: () => void; onMore: (name: string) => void }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(quick.initialName ?? "");
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     if (!name.trim() || busy) return;
@@ -586,8 +772,9 @@ function QuickCreate({ quick, store, onClose, onMore }: { quick: QuickState; sto
   };
   return (
     <Floating open point={{ x: quick.x, y: quick.y }} onClose={onClose}>
-      <div className="w-[300px] p-3" data-testid="quick-create">
-        <div className="mb-2 text-[12px] text-ink-500">
+      <div className="relative w-[300px] p-3" data-testid="quick-create">
+        <button className="icon-btn absolute left-1.5 top-1.5 h-6 w-6" onClick={onClose} aria-label="ביטול" title="ביטול (Esc)" data-testid="quick-close"><X size={14} /></button>
+        <div className="mb-2 pl-6 text-[12px] text-ink-500">
           תכולה חדשה · שבועות {weekNumber(quick.start)}–{weekNumber(quick.end)} ({fmtDate(quick.start)} – {fmtDate(weekEndOf(quick.end))})
         </div>
         <input className="input" autoFocus placeholder="שם התכולה ואז Enter" value={name} onChange={(e) => setName(e.target.value)}

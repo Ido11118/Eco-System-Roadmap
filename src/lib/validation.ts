@@ -1,13 +1,13 @@
 import { z } from "zod";
-import { STATUSES, PRIORITIES } from "./constants";
 import { isISODate, isSunday } from "./weeks";
 
 export const isoDate = z.string().refine(isISODate, "תאריך לא תקין");
 export const sunday = isoDate.refine(isSunday, "שבוע חייב להתחיל ביום ראשון");
 const name = z.string().trim().min(1, "יש להזין שם").max(300, "השם ארוך מדי");
 const notes = z.string().max(5000, "ההערה ארוכה מדי");
-const status = z.enum(STATUSES);
-const priority = z.enum(PRIORITIES);
+// סטטוס/תיעדוף: מפתח מהקטלוג (נבדק מול בסיס הנתונים בשרת)
+const status = z.string().trim().min(1).max(40);
+const priority = z.string().trim().min(1).max(40);
 const id = z.number().int().positive();
 
 export const registerSchema = z.object({
@@ -55,11 +55,11 @@ export const milestonePatchSchema = z.object({
   patch: z.object({ name: name.optional(), date: isoDate.optional(), teamId: id.nullable().optional(), notes: notes.optional() }).strict(),
 });
 
-export const sprintSchema = z.object({ name, startDate: isoDate, endDate: isoDate, teamId: id, notes: notes.optional() })
+export const sprintSchema = z.object({ name, startDate: isoDate, endDate: isoDate, domainId: id, notes: notes.optional() })
   .refine((v) => v.endDate >= v.startDate, { message: "תאריך הסיום אינו יכול להיות לפני תאריך ההתחלה" });
 export const sprintPatchSchema = z.object({
   version: z.number().int(),
-  patch: z.object({ name: name.optional(), startDate: isoDate.optional(), endDate: isoDate.optional(), teamId: id.optional(), notes: notes.optional() }).strict(),
+  patch: z.object({ name: name.optional(), startDate: isoDate.optional(), endDate: isoDate.optional(), domainId: id.optional(), notes: notes.optional() }).strict(),
 });
 
 export const viewConfigSchema = z.object({
@@ -76,6 +76,7 @@ export const viewConfigSchema = z.object({
     z.object({ kind: z.literal("year"), year: z.number().int() }),
     z.object({ kind: z.literal("dates"), from: isoDate, to: isoDate }),
   ]),
+  showItems: z.boolean().default(true),
   showMilestones: z.boolean().default(true),
   showSprints: z.boolean().default(false),
   density: z.enum(["compact", "normal", "wide"]).default("normal"),
@@ -96,6 +97,8 @@ export const preferencesSchema = z.object({
   lastView: viewConfigSchema.optional(),
   lastMode: z.enum(["gantt", "table", "compare"]).optional(),
   sidebarCollapsed: z.boolean().optional(),
+  textSize: z.enum(["sm", "md", "lg", "xl"]).optional(),
+  tableCollapsed: z.array(z.number().int()).max(500).optional(),
 }).strict();
 
 export const adminUserActionSchema = z.discriminatedUnion("action", [
@@ -124,7 +127,7 @@ export const planDataSchema = z.object({
     createdById: z.number().int().nullable(), createdAt: z.string(), updatedAt: z.string(), updatedById: z.number().int().nullable(),
   })),
   sprints: z.array(z.object({
-    id: z.number().int(), name, startDate: isoDate, endDate: isoDate, teamId: z.number().int(), notes: z.string(), version: z.number().int(),
+    id: z.number().int(), name, startDate: isoDate, endDate: isoDate, domainId: z.number().int(), notes: z.string(), version: z.number().int(),
     createdById: z.number().int().nullable(), createdAt: z.string(), updatedAt: z.string(), updatedById: z.number().int().nullable(),
   })),
   users: z.array(z.object({ id, fullName: z.string() })),
@@ -134,6 +137,7 @@ export const snapshotCreateSchema = z.object({
   name: z.string().trim().min(1, "יש להזין שם ל-Snapshot").max(150),
   description: z.string().max(2000).default(""),
   asOfDate: isoDate.optional(),
+  scope: z.enum(["shared", "personal"]).optional(),
 });
 export const snapshotMetaSchema = z.object({
   name: z.string().trim().min(1, "יש להזין שם ל-Snapshot").max(150).optional(),
@@ -145,3 +149,16 @@ export const snapshotRevisionSchema = z.object({
   note: z.string().max(500).default(""),
   data: planDataSchema,
 });
+
+// --- קטלוג סטטוסים ותיעדופים (ניהול מערכת) ---
+const color = z.string().regex(/^#[0-9a-fA-F]{6}$/, "צבע לא תקין");
+const label = z.string().trim().min(1, "יש להזין שם").max(40, "השם ארוך מדי");
+export const statusCreateSchema = z.object({
+  label, bg: color,
+  category: z.enum(["planned", "active", "done", "done_unplanned", "cancelled", "other"]),
+  noteRecommended: z.boolean().default(false),
+  isDefault: z.boolean().optional(),
+});
+export const statusPatchSchema = statusCreateSchema.partial().extend({ sortOrder: z.number().int().optional(), archived: z.literal(false).optional() });
+export const priorityCreateSchema = z.object({ label, color, isDefault: z.boolean().optional() });
+export const priorityPatchSchema = priorityCreateSchema.partial().extend({ sortOrder: z.number().int().optional(), archived: z.literal(false).optional() });

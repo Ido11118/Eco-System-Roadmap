@@ -1,15 +1,17 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, X, PauseCircle, PlayCircle, KeyRound, Copy, Eye, Save } from "lucide-react";
+import { Check, X, PauseCircle, PlayCircle, KeyRound, Copy, Eye, Save, Search } from "lucide-react";
 import type { Me } from "@/lib/types";
 import { api } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
 import { AppShell } from "@/components/AppShell";
+import { CatalogSettings } from "./CatalogSettings";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm, Dialog } from "@/components/ui/dialog";
 import { fmtTs } from "@/components/plan/ui";
+import { MultiSelect } from "@/components/ui/popover";
 
 type AdminUser = {
   id: number; email: string; fullName: string; role: "SUPER" | "USER"; status: "PENDING" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -20,7 +22,7 @@ const STATUS_LABEL = { PENDING: "ממתין לאישור", APPROVED: "מאושר
 const STATUS_CLS = { PENDING: "bg-amber-100 text-amber-800", APPROVED: "bg-green-100 text-green-800", REJECTED: "bg-red-100 text-red-700", SUSPENDED: "bg-ink-200 text-ink-700" };
 
 export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name: string }[] }) {
-  const [tab, setTab] = useState<"pending" | "users" | "audit">("pending");
+  const [tab, setTab] = useState<"users" | "audit" | "settings">("users");
   const q = useQuery({ queryKey: ["admin-users"], queryFn: () => api<AdminUser[]>("GET", "/api/admin/users"), refetchInterval: 15000 });
   const users = q.data ?? [];
   const pending = users.filter((u) => u.status === "PENDING");
@@ -29,24 +31,80 @@ export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name:
       <TopBar me={me}><span className="text-[14px] font-semibold text-ink-900">ניהול מערכת</span></TopBar>
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-[1200px] px-6 py-6">
-          <h1 className="text-[20px] font-bold">ניהול משתמשים והרשאות</h1>
-          <p className="mt-1 text-ink-500">אישור משתמש מקנה צפייה בכל תוכנית העבודה. הרשאות עריכה ניתנות לפי תחום, ובנפרד למידע הרוחבי.</p>
+          <h1 className="text-[20px] font-bold">ניהול מערכת</h1>
+          <p className="mt-1 text-ink-500">משתמשים והרשאות: אישור משתמש מקנה צפייה בכל תוכנית העבודה, והרשאות עריכה ניתנות לפי תחום ובנפרד למידע הרוחבי. בלשונית &quot;הגדרות&quot; — סטטוסים ותיעדוף.</p>
           <div className="mt-5 flex gap-1 border-b border-ink-200">
-            {([["pending", `בקשות ממתינות (${pending.length})`], ["users", `כל המשתמשים (${users.length})`], ["audit", "יומן פעולות"]] as const).map(([k, l]) => (
+            {([["users", pending.length ? `משתמשים · ${pending.length} ממתינים` : "משתמשים"], ["settings", "הגדרות"], ["audit", "יומן פעולות"]] as const).map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} data-testid={`admin-tab-${k}`}
                 className={clsx("-mb-px border-b-2 px-3 py-2 text-[13px] font-medium", tab === k ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500 hover:text-ink-900")}>{l}</button>
             ))}
           </div>
           <div className="mt-4 space-y-3">
-            {tab === "audit" ? <AuditLog /> : (
-              (tab === "pending" ? pending : users).length === 0
-                ? <div className="card p-10 text-center text-ink-500">{tab === "pending" ? "אין בקשות ממתינות." : "אין משתמשים."}</div>
-                : (tab === "pending" ? pending : users).map((u) => <UserCard key={u.id} u={u} domains={domains} />)
+            {tab === "settings" ? <CatalogSettings /> : tab === "audit" ? <AuditLog /> : (
+              <UsersPage users={users} pending={pending} domains={domains} loading={q.isLoading} />
             )}
           </div>
         </div>
       </div>
     </AppShell>
+  );
+}
+
+// סינון לפי הרשאה: מזהה תחום, או אחד הערכים המיוחדים
+const F_CROSS = -1, F_VIEW_ONLY = -2;
+
+function UsersPage({ users, pending, domains, loading }: {
+  users: AdminUser[]; pending: AdminUser[]; domains: { id: number; name: string }[]; loading: boolean;
+}) {
+  const [q, setQ] = useState("");
+  const [perm, setPerm] = useState<number[]>([]);
+  const others = useMemo(() => users.filter((u) => u.status !== "PENDING"), [users]);
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    return others.filter((u) => {
+      if (term && !u.fullName.toLowerCase().includes(term) && !u.email.toLowerCase().includes(term)) return false;
+      if (!perm.length) return true;
+      const isSuper = u.role === "SUPER"; // מנהל המערכת עורך הכל
+      return perm.some((f) =>
+        f === F_CROSS ? isSuper || u.canEditCross
+        : f === F_VIEW_ONLY ? !isSuper && !u.canEditCross && u.domainIds.length === 0
+        : isSuper || u.domainIds.includes(f));
+    });
+  }, [others, q, perm]);
+  const permOptions = [
+    ...domains.map((d) => ({ value: d.id, label: d.name })),
+    { value: F_CROSS, label: "רוחבי" },
+    { value: F_VIEW_ONLY, label: "צפייה בלבד (ללא עריכה)" },
+  ];
+  if (loading) return <div className="card p-10 text-center text-ink-500">טוען…</div>;
+  return (
+    <div className="space-y-6">
+      <section className="space-y-3" data-testid="pending-section">
+        <h2 className="flex items-center gap-2 text-[15px] font-semibold">
+          בקשות ממתינות
+          {pending.length > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11.5px] font-medium text-amber-800">{pending.length}</span>}
+        </h2>
+        {pending.length === 0
+          ? <div className="card px-4 py-3 text-[13px] text-ink-500">אין בקשות ממתינות.</div>
+          : pending.map((u) => <UserCard key={u.id} u={u} domains={domains} />)}
+      </section>
+
+      <section className="space-y-3" data-testid="users-section">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-[15px] font-semibold">כל המשתמשים <span className="font-normal text-ink-400">({filtered.length === others.length ? others.length : `${filtered.length} מתוך ${others.length}`})</span></h2>
+          <div className="mr-auto flex flex-wrap items-center gap-2">
+            <label className="relative">
+              <Search size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-400" />
+              <input className="input h-8 w-[220px] pr-8 text-[12.5px]" placeholder="חיפוש לפי שם או מייל…" value={q} onChange={(e) => setQ(e.target.value)} data-testid="users-search" />
+            </label>
+            <MultiSelect label="הרשאת עריכה" options={permOptions} value={perm} onChange={setPerm} width={240} />
+          </div>
+        </div>
+        {filtered.length === 0
+          ? <div className="card p-8 text-center text-ink-500">{others.length ? "אין משתמשים שתואמים לסינון." : "אין משתמשים."}</div>
+          : filtered.map((u) => <UserCard key={u.id} u={u} domains={domains} />)}
+      </section>
+    </div>
   );
 }
 
@@ -144,7 +202,7 @@ function UserCard({ u, domains }: { u: AdminUser; domains: { id: number; name: s
 
 function AuditLog() {
   const q = useQuery({ queryKey: ["audit"], queryFn: () => api<{ id: number; at: string; entityType: string; entityId: string; action: string; summary: string; userName: string | null }[]>("GET", "/api/admin/audit?limit=500") });
-  const ET: Record<string, string> = { item: "תכולה", row: "שורה", milestone: "אבן דרך", sprint: "ספרינט", snapshot: "Snapshot", user: "משתמש" };
+  const ET: Record<string, string> = { item: "תכולה", row: "שורה", milestone: "אבן דרך", sprint: "ספרינט", snapshot: "Snapshot", user: "משתמש", catalog: "הגדרות" };
   return (
     <div className="card overflow-hidden">
       <table className="w-full text-[12.5px]">

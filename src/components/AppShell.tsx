@@ -10,13 +10,16 @@ import {
 } from "lucide-react";
 import type { Me } from "@/lib/types";
 import { api } from "@/lib/api";
-import { currentPrefs, savePrefs } from "@/components/plan/prefs";
+import { currentPrefs, savePrefs, useTextSize, zoomOf } from "@/components/plan/prefs";
 
 export type NavKey = "gantt" | "table" | "compare" | "snapshots" | "admin";
 
 export function AppShell({ me, active, children }: { me: Me; active: NavKey; children: React.ReactNode }) {
+  // גודל תצוגה אישי: מגדיל/מקטין את כל הממשק (טקסט, שורות, כפתורים). height מתוקן כדי למלא בדיוק את המסך.
+  const [size] = useTextSize(me.preferences);
+  const z = zoomOf(size);
   return (
-    <div className="flex h-screen w-full overflow-hidden">
+    <div className="flex w-full overflow-hidden" style={{ zoom: z, height: `calc(100vh / ${z})` }}>
       <Sidebar me={me} active={active} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
     </div>

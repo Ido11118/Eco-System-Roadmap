@@ -8,6 +8,7 @@ export function defaultViewConfig(prefs?: { showMilestones?: boolean; showSprint
   return {
     domainIds: [], teamIds: [], statuses: [], priorities: [], search: "",
     time: { kind: "all" },
+    showItems: true,
     showMilestones: prefs?.showMilestones ?? true,
     showSprints: prefs?.showSprints ?? false, // ספרינטים מוסתרים כברירת מחדל
     density: prefs?.density ?? "normal",
@@ -26,7 +27,8 @@ export function timeWindow(t: TimeFilter, data?: PlanData): [ISODate, ISODate] {
     case "year": return periodWeeksWindow(`${t.year}-01-01`, `${t.year}-12-31`);
     case "dates": return t.from <= t.to ? [t.from, t.to] : [t.to, t.from];
     case "all": {
-      let minY = y, maxY = y;
+      // תמיד מציגים לפחות את השנה הנוכחית ואת השנה הבאה במלואן, גם אם עדיין אין בה תכולות
+      let minY = y, maxY = y + 1;
       for (const i of data?.items ?? []) {
         minY = Math.min(minY, Number(i.startWeek.slice(0, 4)));
         maxY = Math.max(maxY, Number(i.endWeek.slice(0, 4)));
@@ -112,4 +114,68 @@ export function visibleTeamIds(data: PlanData, v: ViewConfig): Set<number> {
   return new Set(data.teams.filter((t) =>
     (v.domainIds.length === 0 || v.domainIds.includes(t.domainId)) &&
     (v.teamIds.length === 0 || v.teamIds.includes(t.id))).map((t) => t.id));
+}
+
+// ---------------------------------------------------------------------------
+// הסתרה / חשיפה מתוך המסך (קליק ימני על תחום/צוות, ואחרי הוספה)
+// domainIds / teamIds הם רשימות "הכללה" — ריק = הכל.
+// ---------------------------------------------------------------------------
+
+/** הסתרת תחום מהתצוגה. null = לא ניתן (זה התחום האחרון שמוצג). */
+export function hideDomain(v: ViewConfig, data: PlanData, domainId: number): ViewConfig | null {
+  const shown = (v.domainIds.length ? v.domainIds : data.domains.map((d) => d.id)).filter((id) => id !== domainId);
+  if (!shown.length) return null;
+  const teamsOfDomain = new Set(data.teams.filter((t) => t.domainId === domainId).map((t) => t.id));
+  return { ...v, domainIds: shown, teamIds: v.teamIds.filter((t) => !teamsOfDomain.has(t)) };
+}
+
+/** הצגת תחום אחד בלבד */
+export function onlyDomain(v: ViewConfig, domainId: number): ViewConfig {
+  return { ...v, domainIds: [domainId], teamIds: [] };
+}
+
+/** הסתרת צוות מהתצוגה. null = לא ניתן (זה הצוות האחרון שמוצג). */
+export function hideTeam(v: ViewConfig, data: PlanData, teamId: number): ViewConfig | null {
+  const visible = [...visibleTeamIds(data, v)].filter((id) => id !== teamId);
+  if (!visible.length) return null;
+  return { ...v, teamIds: visible };
+}
+
+/** סינון ברירת מחדל לפי הרשאות: משתמש עם עריכה לתחומים מסוימים רואה בהתחלה רק אותם */
+export function permissionDefaultDomains(me: { role: string; domainIds: number[] }): number[] {
+  return me.role !== "SUPER" && me.domainIds.length ? [...me.domainIds] : [];
+}
+
+export type Revealable =
+  | { kind: "item"; teamId: number | null; status: string; priority: string; name: string; notes?: string; startWeek: ISODate; endWeek: ISODate }
+  | { kind: "milestone"; teamId: number | null; date: ISODate }
+  | { kind: "sprint"; domainId: number; startDate: ISODate; endDate: ISODate };
+
+/**
+ * אחרי הוספה: אם הסינון הנוכחי מסתיר את מה שנוסף — פותחים את הסינון רק כמה שצריך כדי להציג אותו.
+ * מחזיר את התצוגה החדשה (או null אם הכל כבר מוצג) ותיאור קצר של מה שהשתנה.
+ */
+export function revealFor(v: ViewConfig, data: PlanData, x: Revealable): { view: ViewConfig; changes: string[] } | null {
+  let n = { ...v };
+  const changes: string[] = [];
+  const team = "teamId" in x && x.teamId !== null ? data.teams.find((t) => t.id === x.teamId) : undefined;
+  const domainId = x.kind === "sprint" ? x.domainId : team?.domainId;
+  if (domainId !== undefined && n.domainIds.length && !n.domainIds.includes(domainId)) { n.domainIds = [...n.domainIds, domainId]; changes.push("תחום"); }
+  if (team && n.teamIds.length && !n.teamIds.includes(team.id)) { n.teamIds = [...n.teamIds, team.id]; changes.push("צוות"); }
+  if (x.kind === "sprint" && n.teamIds.length && !data.teams.some((t) => t.domainId === x.domainId && n.teamIds.includes(t.id))) {
+    n.teamIds = [...n.teamIds, ...data.teams.filter((t) => t.domainId === x.domainId).map((t) => t.id)]; changes.push("צוות");
+  }
+  if (x.kind === "item") {
+    if (n.showItems === false) { n.showItems = true; changes.push("תכולות"); }
+    if (n.statuses.length && !n.statuses.includes(x.status)) { n.statuses = [...n.statuses, x.status]; changes.push("סטטוס"); }
+    if (n.priorities.length && !n.priorities.includes(x.priority)) { n.priorities = [...n.priorities, x.priority]; changes.push("תיעדוף"); }
+    const q = n.search.trim().toLowerCase();
+    if (q && !x.name.toLowerCase().includes(q) && !(x.notes ?? "").toLowerCase().includes(q)) { n.search = ""; changes.push("חיפוש"); }
+  }
+  if (x.kind === "milestone" && !n.showMilestones) { n.showMilestones = true; changes.push("אבני דרך"); }
+  if (x.kind === "sprint" && !n.showSprints) { n.showSprints = true; changes.push("ספרינטים"); }
+  const [from, to] = x.kind === "item" ? [x.startWeek, x.endWeek] : x.kind === "milestone" ? [x.date, x.date] : [x.startDate, x.endDate];
+  const [w0, w1] = timeWindow(n.time, data);
+  if (to < w0 || from > w1) { n = { ...n, time: { kind: "all" } }; changes.push("טווח הזמן"); }
+  return changes.length ? { view: n, changes: [...new Set(changes)] } : null;
 }

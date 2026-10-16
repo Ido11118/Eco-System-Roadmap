@@ -6,7 +6,8 @@ import {
 } from "@/db/schema";
 import type { ItemDTO, Me, MilestoneDTO, PlanData, RowDTO, SprintDTO } from "@/lib/types";
 import { ApiError } from "./errors";
-import { STATUS_META, PRIORITY_META, type Status, type PriorityT } from "@/lib/constants";
+import { loadCatalog } from "./catalog";
+import type { Catalog } from "@/lib/catalog";
 
 // ---------------------------------------------------------------------------
 // טעינת התוכנית הנוכחית (מקור הנתונים היחיד לכל התצוגות)
@@ -32,7 +33,7 @@ export function msToDTO(m: typeof milestones.$inferSelect): MilestoneDTO {
 }
 export function sprintToDTO(s: typeof sprints.$inferSelect): SprintDTO {
   return {
-    id: s.id, name: s.name, startDate: s.startDate, endDate: s.endDate, teamId: s.teamId, notes: s.notes,
+    id: s.id, name: s.name, startDate: s.startDate, endDate: s.endDate, domainId: s.domainId, notes: s.notes,
     version: s.version, createdById: s.createdById, createdAt: iso(s.createdAt), updatedAt: iso(s.updatedAt),
     updatedById: s.updatedById,
   };
@@ -82,6 +83,12 @@ export function canEditCross(me: Me) {
 async function assertTeam(me: Me, teamId: number) {
   if (!(await canEditTeam(me, teamId))) throw new ApiError(403, "אין לך הרשאת עריכה לתחום זה");
 }
+/** עריכת ספרינט: הרשאה לתחום (ספרינט שייך לתחום כולו) */
+async function assertDomain(me: Me, domainId: number) {
+  const [d] = await db.select({ id: domains.id }).from(domains).where(eq(domains.id, domainId));
+  if (!d) throw new ApiError(400, "תחום לא קיים");
+  if (me.role !== "SUPER" && !me.domainIds.includes(domainId)) throw new ApiError(403, "אין לך הרשאת עריכה לתחום זה");
+}
 function assertCross(me: Me) {
   if (!canEditCross(me)) throw new ApiError(403, "אין לך הרשאת עריכה למידע הרוחבי");
 }
@@ -113,9 +120,9 @@ const FIELD_LABELS: Record<string, string> = {
   name: "שם", status: "סטטוס", priority: "תיעדוף", notes: "הערות", startWeek: "שבוע התחלה", endWeek: "שבוע סיום",
   rowId: "שורה", teamId: "צוות", date: "תאריך", startDate: "תאריך התחלה", endDate: "תאריך סיום",
 };
-function summarizeDiff(d: Record<string, { from: unknown; to: unknown }>) {
+function summarizeDiff(d: Record<string, { from: unknown; to: unknown }>, cat?: Catalog) {
   return Object.entries(d).map(([k, v]) => {
-    const fmt = (x: unknown) => k === "status" ? STATUS_META[x as Status]?.label : k === "priority" ? PRIORITY_META[x as PriorityT]?.label : k === "notes" ? "…" : String(x);
+    const fmt = (x: unknown) => k === "status" ? (cat?.status(String(x)).label ?? String(x)) : k === "priority" ? (cat?.priority(String(x)).label ?? String(x)) : k === "notes" ? "…" : String(x);
     return `${FIELD_LABELS[k] ?? k}: ${fmt(v.from)} ← ${fmt(v.to)}`;
   }).join(" · ");
 }
@@ -201,17 +208,26 @@ async function assertNoOverlap(tx: Tx, rowId: number, rowKind: string, start: st
 
 export type ItemInput = {
   rowId: number; name: string; startWeek: string; endWeek: string;
-  status?: Status; priority?: PriorityT; notes?: string;
+  status?: string; priority?: string; notes?: string;
 };
 
+/** סטטוס/תיעדוף חייבים להיות בקטלוג — הודעה ברורה במקום שגיאת מפתח זר */
+function assertInCatalog(cat: Catalog, v: { status?: string; priority?: string }) {
+  // cat.statuses / cat.priorities = הפעילים בלבד (ערך בארכיון אינו ניתן לבחירה)
+  if (v.status !== undefined && !cat.statuses.some((s) => s.key === v.status)) throw new ApiError(400, "סטטוס לא קיים (ייתכן שנמחק ע\"י מנהל המערכת). רענן את הדף.");
+  if (v.priority !== undefined && !cat.priorities.some((p) => p.key === v.priority)) throw new ApiError(400, "תיעדוף לא קיים (ייתכן שנמחק ע\"י מנהל המערכת). רענן את הדף.");
+}
+
 export async function createItem(me: Me, input: ItemInput) {
+  const cat = await loadCatalog();
+  assertInCatalog(cat, input);
   return db.transaction(async (tx) => {
     const row = await getRowForUpdate(tx, input.rowId);
     await assertRow(me, row);
     await assertNoOverlap(tx, row.id, row.kind, input.startWeek, input.endWeek);
     const [it] = await tx.insert(workItems).values({
       name: input.name, rowId: row.id, teamId: row.teamId, startWeek: input.startWeek, endWeek: input.endWeek,
-      status: input.status ?? "PLANNED", priority: input.priority ?? "NONE", notes: input.notes ?? "",
+      status: input.status ?? cat.defaultStatus, priority: input.priority ?? cat.defaultPriority, notes: input.notes ?? "",
       createdById: me.id, updatedById: me.id,
     }).returning();
     await audit(tx, me.id, "item", it.id, "create", { name: it.name, startWeek: it.startWeek, endWeek: it.endWeek, status: it.status }, `נוצרה תכולה "${it.name}"`);
@@ -220,10 +236,12 @@ export async function createItem(me: Me, input: ItemInput) {
 }
 
 export type ItemPatch = Partial<{
-  name: string; status: Status; priority: PriorityT; notes: string; startWeek: string; endWeek: string; rowId: number;
+  name: string; status: string; priority: string; notes: string; startWeek: string; endWeek: string; rowId: number;
 }>;
 
-export async function updateItem(me: Me, id: number, version: number, patch: ItemPatch, tx0?: Tx) {
+export async function updateItem(me: Me, id: number, version: number, patch: ItemPatch, tx0?: Tx, cat0?: Catalog) {
+  const cat = cat0 ?? await loadCatalog();
+  assertInCatalog(cat, patch);
   const run = async (tx: Tx) => {
     const [cur] = await tx.select().from(workItems).where(and(eq(workItems.id, id), isNull(workItems.deletedAt)));
     if (!cur) throw new ApiError(404, "התכולה לא נמצאה (ייתכן שנמחקה)");
@@ -252,13 +270,14 @@ export async function updateItem(me: Me, id: number, version: number, patch: Ite
     }).where(and(eq(workItems.id, id), eq(workItems.version, version))).returning();
     if (!upd) throw new ApiError(409, "התכולה עודכנה בינתיים על ידי משתמש אחר.", { conflict: "version" });
     const action = d.rowId || d.teamId ? "move" : "update";
-    await audit(tx, me.id, "item", id, action, d, summarizeDiff(d));
+    await audit(tx, me.id, "item", id, action, d, summarizeDiff(d, cat));
     return itemToDTO(upd);
   };
   return tx0 ? run(tx0) : db.transaction(run);
 }
 
 export async function bulkUpdateItems(me: Me, entries: { id: number; version: number }[], patch: Pick<ItemPatch, "status" | "priority">) {
+  const cat = await loadCatalog();
   return db.transaction(async (tx) => {
     // נעילת כל השורות הרלוונטיות מראש בסדר קבוע — מונע Deadlock בין עדכונים מרובים מקבילים
     const ids = [...new Set(entries.map((e) => e.id))];
@@ -266,7 +285,7 @@ export async function bulkUpdateItems(me: Me, entries: { id: number; version: nu
       .sort((a, b) => a - b);
     for (const r of rowIds) await tx.execute(sql`SELECT id FROM work_rows WHERE id = ${r} FOR UPDATE`);
     const out: ItemDTO[] = [];
-    for (const e of [...entries].sort((a, b) => a.id - b.id)) out.push(await updateItem(me, e.id, e.version, patch, tx));
+    for (const e of [...entries].sort((a, b) => a.id - b.id)) out.push(await updateItem(me, e.id, e.version, patch, tx, cat));
     return out;
   });
 }
@@ -287,17 +306,60 @@ export async function deleteItem(me: Me, id: number, version?: number) {
   });
 }
 
+/**
+ * שחזור תכולה שנמחקה — עם אותו ID (כך שהשוואת תכנון מול ביצוע ממשיכה לזהות אותה).
+ * אם השורה המקורית נמחקה, או שבינתיים נוספה בה תכולה חופפת — משחזרים לשורה פנויה של אותו צוות (או לשורה חדשה).
+ */
 export async function restoreItem(me: Me, id: number) {
   return db.transaction(async (tx) => {
     const [cur] = await tx.select().from(workItems).where(eq(workItems.id, id));
     if (!cur || !cur.deletedAt) throw new ApiError(404, "אין מה לשחזר");
-    const row = await getRowForUpdate(tx, cur.rowId);
-    await assertRow(me, row);
-    await assertNoOverlap(tx, row.id, row.kind, cur.startWeek, cur.endWeek, id);
-    const [upd] = await tx.update(workItems).set({ deletedAt: null, deletedById: null, version: cur.version + 1 }).where(eq(workItems.id, id)).returning();
-    await audit(tx, me.id, "item", id, "restore", null, `שוחזרה תכולה "${cur.name}"`);
+    const [orig] = await tx.select().from(workRows).where(eq(workRows.id, cur.rowId));
+    await assertRow(me, orig);
+    const free = async (rowId: number) => {
+      if (orig.kind !== "TEAM") return true; // בשורות רוחביות מותרת חפיפה
+      const [c] = await tx.select({ id: workItems.id }).from(workItems).where(and(
+        eq(workItems.rowId, rowId), isNull(workItems.deletedAt), ne(workItems.id, id),
+        sql`${workItems.startWeek} <= ${cur.endWeek}`, sql`${workItems.endWeek} >= ${cur.startWeek}`)).limit(1);
+      return !c;
+    };
+    let targetId: number | null = null;
+    if (!orig.deletedAt) { await getRowForUpdate(tx, orig.id); if (await free(orig.id)) targetId = orig.id; }
+    if (targetId === null) {
+      if (orig.kind !== "TEAM") throw new ApiError(409, "לא ניתן לשחזר: השורה הרוחבית אינה קיימת");
+      const rows = await tx.select().from(workRows)
+        .where(and(eq(workRows.teamId, orig.teamId!), isNull(workRows.deletedAt))).orderBy(asc(workRows.sortOrder));
+      for (const r of rows) { await getRowForUpdate(tx, r.id); if (await free(r.id)) { targetId = r.id; break; } }
+      if (targetId === null) {
+        const [nr] = await tx.insert(workRows).values({ kind: "TEAM", teamId: orig.teamId, sortOrder: (rows[rows.length - 1]?.sortOrder ?? 0) + 1000, createdById: me.id }).returning();
+        await audit(tx, me.id, "row", nr.id, "create", { teamId: orig.teamId }, "נוספה שורה לשחזור תכולה");
+        targetId = nr.id;
+      }
+    }
+    const moved = targetId !== cur.rowId;
+    const [upd] = await tx.update(workItems).set({ deletedAt: null, deletedById: null, rowId: targetId, version: cur.version + 1, updatedAt: new Date(), updatedById: me.id })
+      .where(eq(workItems.id, id)).returning();
+    await audit(tx, me.id, "item", id, "restore", moved ? { rowId: { from: cur.rowId, to: targetId } } : null,
+      `שוחזרה תכולה "${cur.name}"${moved ? " (לשורה אחרת — המקורית נמחקה או תפוסה)" : ""}`);
     return itemToDTO(upd);
   });
+}
+
+/** תכולות שנמחקו (ב-180 הימים האחרונים) — לשחזור עם אותו ID. רק בתחומים שהמשתמש מורשה לערוך. */
+export async function listDeletedItems(me: Me) {
+  const since = new Date(Date.now() - 180 * 86400000);
+  const rows = await db.select({ i: workItems, kind: workRows.kind, rowTeam: workRows.teamId, deletedBy: users.fullName })
+    .from(workItems).innerJoin(workRows, eq(workRows.id, workItems.rowId)).leftJoin(users, eq(users.id, workItems.deletedById))
+    .where(and(sql`${workItems.deletedAt} is not null`, sql`${workItems.deletedAt} > ${since}`))
+    .orderBy(sql`${workItems.deletedAt} desc`).limit(300);
+  const teamDomains = new Map((await db.select({ id: teams.id, d: teams.domainId }).from(teams)).map((t) => [t.id, t.d]));
+  // מוצגות רק תכולות שהמשתמש מורשה לשחזר (תחומים שיש לו הרשאת עריכה אליהם; רוחבי — רק עם הרשאה רוחבית)
+  return rows
+    .map((r) => ({
+      ...itemToDTO(r.i), deletedAt: r.i.deletedAt!.toISOString(), deletedBy: r.deletedBy ?? "—", rowKind: r.kind,
+      canRestore: r.kind === "TEAM" ? me.role === "SUPER" || me.domainIds.includes(teamDomains.get(r.rowTeam!) ?? -1) : canEditCross(me),
+    }))
+    .filter((r) => r.canRestore);
 }
 
 // ---------------------------------------------------------------------------
@@ -346,21 +408,21 @@ export async function deleteMilestone(me: Me, id: number, restore = false) {
   });
 }
 
-export async function createSprint(me: Me, v: { name: string; startDate: string; endDate: string; teamId: number; notes?: string }) {
-  await assertTeam(me, v.teamId);
+export async function createSprint(me: Me, v: { name: string; startDate: string; endDate: string; domainId: number; notes?: string }) {
+  await assertDomain(me, v.domainId);
   if (v.endDate < v.startDate) throw new ApiError(400, "תאריך הסיום אינו יכול להיות לפני תאריך ההתחלה");
   const [s] = await db.insert(sprints).values({ ...v, notes: v.notes ?? "", createdById: me.id, updatedById: me.id }).returning();
   await audit(db, me.id, "sprint", s.id, "create", { name: s.name }, `נוצר ספרינט "${s.name}"`);
   return sprintToDTO(s);
 }
 
-export async function updateSprint(me: Me, id: number, version: number, patch: Partial<{ name: string; startDate: string; endDate: string; teamId: number; notes: string }>) {
+export async function updateSprint(me: Me, id: number, version: number, patch: Partial<{ name: string; startDate: string; endDate: string; domainId: number; notes: string }>) {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT id FROM sprints WHERE id = ${id} FOR UPDATE`);
     const [cur] = await tx.select().from(sprints).where(and(eq(sprints.id, id), isNull(sprints.deletedAt)));
     if (!cur) throw new ApiError(404, "הספרינט לא נמצא");
-    await assertTeam(me, cur.teamId);
-    if (patch.teamId !== undefined) await assertTeam(me, patch.teamId);
+    await assertDomain(me, cur.domainId);
+    if (patch.domainId !== undefined) await assertDomain(me, patch.domainId);
     if (cur.version !== version) throw new ApiError(409, "הספרינט עודכן בינתיים על ידי משתמש אחר.", { conflict: "version" });
     const s = patch.startDate ?? cur.startDate, e = patch.endDate ?? cur.endDate;
     if (e < s) throw new ApiError(400, "תאריך הסיום אינו יכול להיות לפני תאריך ההתחלה");
@@ -379,7 +441,7 @@ export async function deleteSprint(me: Me, id: number, restore = false) {
     await tx.execute(sql`SELECT id FROM sprints WHERE id = ${id} FOR UPDATE`);
     const [cur] = await tx.select().from(sprints).where(eq(sprints.id, id));
     if (!cur || (restore ? !cur.deletedAt : !!cur.deletedAt)) throw new ApiError(404, restore ? "אין מה לשחזר" : "הספרינט לא נמצא");
-    await assertTeam(me, cur.teamId);
+    await assertDomain(me, cur.domainId);
     await tx.update(sprints).set({ deletedAt: restore ? null : new Date(), version: cur.version + 1 }).where(eq(sprints.id, id));
     await audit(tx, me.id, "sprint", id, restore ? "restore" : "delete", null, `${restore ? "שוחזר" : "נמחק"} ספרינט "${cur.name}"`);
     return { ok: true };

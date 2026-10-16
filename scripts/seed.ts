@@ -5,6 +5,7 @@ import { db, pool } from "../src/db";
 import { domains, teams, workRows } from "../src/db/schema";
 import { ORG_STRUCTURE, DEFAULT_ROWS_PER_TEAM } from "../src/lib/org";
 import { ensureSuperUser } from "./superuser";
+import { applyCatalogFile } from "../src/server/catalogSync";
 
 async function main() {
   let dOrder = 0;
@@ -30,6 +31,9 @@ async function main() {
     if (!ex.length) await db.insert(workRows).values({ kind, teamId: null, sortOrder: kind === "INFLUENCE" ? 1 : 2 });
   }
   console.log("✓ org structure seeded");
+  // הגדרות סטטוסים ותיעדוף מהקוד (config/catalog.json) — מוחלות רק אם הקובץ השתנה מאז הפעם הקודמת
+  const cat = await applyCatalogFile(db);
+  console.log(cat === "applied" ? "✓ catalog settings applied from config/catalog.json" : cat === "unchanged" ? "✓ catalog settings unchanged" : "! config/catalog.json not found — catalog settings left as is");
   await ensureSuperUser();
 }
 main().then(() => pool.end()).catch((e) => { console.error(e); process.exit(1); });

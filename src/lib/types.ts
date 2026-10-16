@@ -1,4 +1,3 @@
-import type { Status, PriorityT } from "./constants";
 import type { ISODate } from "./weeks";
 
 export type DomainDTO = { id: number; key: string; name: string; sortOrder: number; isSingleTeam: boolean };
@@ -13,8 +12,8 @@ export type ItemDTO = {
   teamId: number | null;
   startWeek: ISODate;
   endWeek: ISODate;
-  status: Status;
-  priority: PriorityT;
+  status: string; // מפתח מקטלוג הסטטוסים
+  priority: string; // מפתח מקטלוג התיעדופים
   notes: string;
   version: number;
   createdAt: string;
@@ -29,7 +28,7 @@ export type MilestoneDTO = {
 };
 
 export type SprintDTO = {
-  id: number; name: string; startDate: ISODate; endDate: ISODate; teamId: number; notes: string; version: number;
+  id: number; name: string; startDate: ISODate; endDate: ISODate; domainId: number; notes: string; version: number;
   createdById: number | null; createdAt: string; updatedAt: string; updatedById: number | null;
 };
 
@@ -65,15 +64,19 @@ export type UserPreferences = {
   lastView?: ViewConfig; // הסינונים והגדרות התצוגה האחרונים — משוחזרים בכניסה הבאה
   lastMode?: "gantt" | "table" | "compare"; // התצוגה האחרונה שבה המשתמש עבד
   sidebarCollapsed?: boolean;
+  textSize?: TextSize; // גודל התצוגה האישי (גודל טקסט וכל הממשק)
+  tableCollapsed?: number[]; // צוותים שמקטע שלהם מכווץ בטבלת התכולות
 };
+export type TextSize = "sm" | "md" | "lg" | "xl";
 
 export type ViewConfig = {
   domainIds: number[]; // ריק = הכל
   teamIds: number[];
-  statuses: Status[];
-  priorities: PriorityT[];
+  statuses: string[];
+  priorities: string[];
   search: string;
   time: TimeFilter;
+  showItems?: boolean; // שכבת התכולות בגאנט (ברירת מחדל: מוצגת)
   showMilestones: boolean;
   showSprints: boolean;
   density: "compact" | "normal" | "wide";
@@ -93,6 +96,8 @@ export type SnapshotMeta = {
   name: string;
   description: string;
   asOfDate: ISODate; // תאריך המצב שה-Snapshot מייצג
+  scope: "shared" | "personal"; // משותף (מנהל המערכת) / אישי (גלוי רק לבעליו)
+  canManage: boolean; // האם המשתמש הנוכחי רשאי לערוך/למחוק
   createdAt: string;
   createdBy: string;
   currentRevisionId: number;

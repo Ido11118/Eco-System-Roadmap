@@ -6,8 +6,8 @@ export type OrgDomain = { id: number; key: string; name: string; teams: OrgTeam[
 export const ORG_STRUCTURE: OrgDomain[] = [
   { id: 1, key: "platform", name: "פלטפורמה", teams: [{ id: 101, key: "platform", name: "פלטפורמה" }] },
   { id: 2, key: "agam", name: 'אג"ם', teams: [
-    { id: 201, key: "azarim-1", name: "אזרים 1" },
-    { id: 202, key: "azarim-2", name: "אזרים 2" },
+    { id: 201, key: "azarim-1", name: "עזרים 1" },
+    { id: 202, key: "azarim-2", name: "עזרים 2" },
     { id: 203, key: "sysadmin", name: "ניהול מערכת" },
   ] },
   { id: 3, key: "rokak", name: "רוקק", teams: [{ id: 301, key: "rokak", name: "רוקק" }] },

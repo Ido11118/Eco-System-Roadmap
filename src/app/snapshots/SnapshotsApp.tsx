@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera, Eye, GitCompareArrows, Pencil, Trash2, History, RotateCcw, ChevronDown, ChevronUp } from "lucide-react";
+import { Camera, Users, User as UserIcon, Eye, GitCompareArrows, Pencil, Trash2, History, RotateCcw, ChevronDown, ChevronUp } from "lucide-react";
 import type { Me, SnapshotMeta } from "@/lib/types";
 import { api } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
@@ -16,7 +16,8 @@ type Rev = { id: number; revisionNo: number; note: string; createdAt: string; cr
 
 export function SnapshotsApp({ me }: { me: Me }) {
   const q = useQuery({ queryKey: ["snapshots"], queryFn: () => api<SnapshotMeta[]>("GET", "/api/snapshots") });
-  const isSuper = me.role === "SUPER";
+  const shared = (q.data ?? []).filter((s) => s.scope === "shared");
+  const mine = (q.data ?? []).filter((s) => s.scope === "personal");
   return (
     <AppShell me={me} active="snapshots">
       <TopBar me={me}><span className="text-[14px] font-semibold text-ink-900">תמונות מצב</span></TopBar>
@@ -24,27 +25,43 @@ export function SnapshotsApp({ me }: { me: Me }) {
         <div className="mx-auto max-w-[1000px] px-6 py-6">
           <h1 className="text-[20px] font-bold">תמונות מצב (Snapshots)</h1>
           <p className="mt-1 text-ink-500">
-            עותקים היסטוריים של תוכנית העבודה. ניתן לצפות בכל Snapshot או להשתמש בו כ-Baseline להשוואת תכנון מול ביצוע.
-            {isSuper ? " עריכת Snapshot יוצרת גרסה (Revision) חדשה — הגרסאות הקודמות נשמרות וניתנות לשחזור." : ""}
+            עותקים היסטוריים של תוכנית העבודה. ניתן לצפות בכל תמונת מצב או להשתמש בה להשוואת תכנון מול ביצוע.
+            עריכת תוכן יוצרת גרסה (Revision) חדשה — הגרסאות הקודמות נשמרות וניתנות לשחזור.
           </p>
-          {!isSuper && <p className="mt-1 text-[12px] text-ink-400">יצירה ועריכה של תמונות מצב מותרות למנהל המערכת בלבד.</p>}
-          <div className="mt-5 space-y-3">
-            {q.isLoading && <div className="text-ink-500">טוען…</div>}
-            {q.data?.length === 0 && (
-              <div className="card p-10 text-center text-ink-500">
-                <Camera className="mx-auto mb-2 text-ink-300" />
-                עדיין לא נשמרו תמונות מצב.{isSuper ? " ניתן ליצור Snapshot מתוך מסך התוכנית (\"שמור תמונת מצב\")." : ""}
-              </div>
-            )}
-            {q.data?.map((s) => <SnapshotCard key={s.id} s={s} isSuper={isSuper} />)}
-          </div>
+          {q.isLoading && <div className="mt-5 text-ink-500">טוען…</div>}
+          {q.data && (
+            <>
+              <section className="mt-6" data-testid="shared-snapshots">
+                <h2 className="flex items-center gap-2 text-[15px] font-semibold text-ink-900"><Users size={16} className="text-brand-600" />תמונות מצב משותפות</h2>
+                <p className="mb-3 text-[12px] text-ink-400">גלויות לכל המשתמשים. נוצרות ומנוהלות ע״י מנהל המערכת.</p>
+                <div className="space-y-3">
+                  {shared.length === 0 && <div className="card p-6 text-center text-ink-500">אין עדיין תמונות מצב משותפות.</div>}
+                  {shared.map((s) => <SnapshotCard key={s.id} s={s} />)}
+                </div>
+              </section>
+              <section className="mt-8" data-testid="my-snapshots">
+                <h2 className="flex items-center gap-2 text-[15px] font-semibold text-ink-900"><UserIcon size={16} className="text-violet-600" />תמונות המצב שלי</h2>
+                <p className="mb-3 text-[12px] text-ink-400">תמונות מצב אלו לא משותפות עם שאר המשתמשים</p>
+                <div className="space-y-3">
+                  {mine.length === 0 && (
+                    <div className="card p-6 text-center text-ink-500">
+                      <Camera className="mx-auto mb-2 text-ink-300" />
+                      עדיין לא שמרת תמונות מצב אישיות.
+                    </div>
+                  )}
+                  {mine.map((s) => <SnapshotCard key={s.id} s={s} />)}
+                </div>
+              </section>
+            </>
+          )}
         </div>
       </div>
     </AppShell>
   );
 }
 
-function SnapshotCard({ s, isSuper }: { s: SnapshotMeta; isSuper: boolean }) {
+function SnapshotCard({ s }: { s: SnapshotMeta }) {
+  const canManage = s.canManage; // משותפת: מנהל המערכת; אישית: הבעלים
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState(false);
   const [f, setF] = useState({ name: s.name, description: s.description, asOfDate: s.asOfDate });
@@ -69,9 +86,9 @@ function SnapshotCard({ s, isSuper }: { s: SnapshotMeta; isSuper: boolean }) {
         <div className="flex flex-wrap items-center gap-1.5">
           <Link className="btn-secondary btn-sm" href={`/plan?snap=${s.id}`}><Eye size={13} />צפייה</Link>
           <Link className="btn-secondary btn-sm" href={`/plan?view=compare&a=${s.id}&b=live`}><GitCompareArrows size={13} />השוואה למצב הנוכחי</Link>
-          {isSuper && <Link className="btn-secondary btn-sm" href={`/snapshots/${s.id}/edit`} data-testid="edit-snapshot"><Pencil size={13} />עריכת תוכן</Link>}
-          {isSuper && <button className="icon-btn" title="שינוי שם, תאריך ותיאור" onClick={() => { setF({ name: s.name, description: s.description, asOfDate: s.asOfDate }); setEdit(true); }}><Pencil size={13} /></button>}
-          {isSuper && <button className="icon-btn hover:text-red-600" title="מחיקה" onClick={async () => {
+          {canManage && <Link className="btn-secondary btn-sm" href={`/snapshots/${s.id}/edit`} data-testid="edit-snapshot"><Pencil size={13} />עריכת תוכן</Link>}
+          {canManage && <button className="icon-btn" title="שינוי שם, תאריך ותיאור" onClick={() => { setF({ name: s.name, description: s.description, asOfDate: s.asOfDate }); setEdit(true); }}><Pencil size={13} /></button>}
+          {canManage && <button className="icon-btn hover:text-red-600" title="מחיקה" onClick={async () => {
             if (await confirm({ title: "מחיקת Snapshot", text: `למחוק את "${s.name}"? לא ניתן יהיה להשתמש בו להשוואה.`, confirm: "מחיקה", danger: true })) {
               try { await api("DELETE", `/api/snapshots/${s.id}`); refresh(); toast.show("success", "נמחק"); } catch (e) { toast.show("error", (e as Error).message); }
             }
@@ -93,7 +110,7 @@ function SnapshotCard({ s, isSuper }: { s: SnapshotMeta; isSuper: boolean }) {
                   <td className="px-3 text-left">
                     <Link className="btn-ghost btn-sm" href={`/plan?snap=${s.id}&rev=${r.id}`}>צפייה</Link>
                     <Link className="btn-ghost btn-sm" href={`/plan?view=compare&a=${s.id}:${r.id}&b=live`}>השוואה</Link>
-                    {isSuper && r.id !== s.currentRevisionId && (
+                    {canManage && r.id !== s.currentRevisionId && (
                       <button className="btn-ghost btn-sm" data-testid={`restore-${r.revisionNo}`} onClick={async () => {
                         if (await confirm({ title: "שחזור גרסה", text: `לשחזר את גרסה ${r.revisionNo}? תיווצר גרסה חדשה עם תוכן זה; ההיסטוריה נשמרת.`, confirm: "שחזור" })) {
                           try { await api("POST", `/api/snapshots/${s.id}/restore`, { revisionId: r.id }); refresh(); toast.show("success", "הגרסה שוחזרה"); } catch (e) { toast.show("error", (e as Error).message); }

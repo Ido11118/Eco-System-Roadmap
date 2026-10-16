@@ -1,25 +1,25 @@
 "use client";
 // תצוגת תכולות (Table View) — אותו מקור נתונים ואותן פעולות עדכון כמו הגאנט.
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Layers, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Layers, X, ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import type { ItemDTO, Me, ViewConfig } from "@/lib/types";
-import { STATUSES, STATUS_META, PRIORITIES, PRIORITY_META, NOTE_RECOMMENDED, type Status, type PriorityT } from "@/lib/constants";
+import { useCatalog } from "@/components/CatalogProvider";
 import { fmtDate, weekEndOf, weekNumber, weekYear } from "@/lib/weeks";
-import { Floating } from "@/components/ui/popover";
+import { Floating, MenuItem } from "@/components/ui/popover";
+import { LabelMenu } from "@/components/gantt/GanttView";
 import { useToast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
 import type { PlanStore } from "@/components/plan/store";
 import { useWorkspaceUI, placeLabel, userName, fmtTs } from "@/components/plan/ui";
 import { itemMatches, timeWindow, visibleTeamIds } from "@/components/plan/filters";
 import { WeekPicker } from "@/components/plan/WeekPicker";
-import { currentPrefs, savePrefs } from "@/components/plan/prefs";
+import { currentPrefs, savePrefs, uiZoom } from "@/components/plan/prefs";
 
 type ColKey = "domain" | "team" | "id" | "name" | "priority" | "status" | "notes" | "start" | "end" | "createdBy" | "updatedAt";
 const COLS: { key: ColKey; label: string; w: number; sticky?: boolean }[] = [
   { key: "domain", label: "תחום", w: 110, sticky: true },
   { key: "team", label: "צוות", w: 130, sticky: true },
-  { key: "id", label: "ID", w: 60 },
   { key: "name", label: "שם התכולה", w: 280 },
   { key: "priority", label: "תיעדוף", w: 100 },
   { key: "status", label: "סטטוס", w: 150 },
@@ -28,15 +28,17 @@ const COLS: { key: ColKey; label: string; w: number; sticky?: boolean }[] = [
   { key: "end", label: "שבוע סיום", w: 150 },
   { key: "createdBy", label: "מי הזין", w: 130 },
   { key: "updatedAt", label: "עדכון אחרון", w: 150 },
+  { key: "id", label: "ID", w: 60 }, // הכי שמאלית — מידע טכני
 ];
 const CHECK_W = 36;
 
-type Row = { item: ItemDTO; domain: string; team: string; domainOrder: number; teamOrder: number; rowOrder: number; editable: boolean };
+type Row = { item: ItemDTO; domain: string; team: string; domainId: number; teamId: number; domainOrder: number; teamOrder: number; rowOrder: number; editable: boolean };
 
-export const TableView = memo(function TableView({ store, view, me }: { store: PlanStore; view: ViewConfig; me: Me }) {
+export const TableView = memo(function TableView({ store, view, setView, me }: { store: PlanStore; view: ViewConfig; setView?: (v: ViewConfig) => void; me: Me }) {
   const data = store.data!;
   const ui = useWorkspaceUI();
   const toast = useToast();
+  const cat = useCatalog();
   const [sort, setSort] = useState<{ key: ColKey; dir: 1 | -1 } | null>(null);
   const [grouped, setGrouped] = useState(true);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -49,12 +51,10 @@ export const TableView = memo(function TableView({ store, view, me }: { store: P
     const dOrder = new Map(data.domains.map((d) => [d.id, d.sortOrder]));
     const tMap = new Map(data.teams.map((t) => [t.id, t]));
     const rMap = new Map(data.rows.map((r) => [r.id, r]));
-    const crossFilterActive = view.domainIds.length > 0 || view.teamIds.length > 0;
     return data.items
       .filter((i) => {
-        const r = rMap.get(i.rowId);
-        if (r?.kind === "TEAM") { if (!teamsVisible.has(i.teamId!)) return false; }
-        else if (crossFilterActive) return false;
+        // בטבלת התכולות מוצגות רק תכולות של צוותים (המידע הרוחבי — רק בגאנט)
+        if (rMap.get(i.rowId)?.kind !== "TEAM" || !teamsVisible.has(i.teamId!)) return false;
         return itemMatches(i, view, view.time.kind === "all" ? undefined : win);
       })
       .map((i) => {
@@ -62,7 +62,7 @@ export const TableView = memo(function TableView({ store, view, me }: { store: P
         const t = i.teamId ? tMap.get(i.teamId) : undefined;
         const r = rMap.get(i.rowId);
         return {
-          item: i, domain: p.domain, team: p.team,
+          item: i, domain: p.domain, team: p.team, domainId: t?.domainId ?? 0, teamId: i.teamId ?? 0,
           domainOrder: t ? dOrder.get(t.domainId) ?? 0 : -1, teamOrder: t?.sortOrder ?? (r?.kind === "INFLUENCE" ? 0 : 1),
           rowOrder: r?.sortOrder ?? 0, editable: store.canEditRow(r),
         };
@@ -78,8 +78,8 @@ export const TableView = memo(function TableView({ store, view, me }: { store: P
         case "team": return r.domainOrder * 10000 + r.teamOrder;
         case "id": return r.item.id;
         case "name": return r.item.name;
-        case "priority": return PRIORITY_META[r.item.priority].rank;
-        case "status": return STATUSES.indexOf(r.item.status);
+        case "priority": return r.item.priority === cat.defaultPriority ? 1e9 : cat.priority(r.item.priority).sortOrder; // "ללא" בסוף
+        case "status": return cat.status(r.item.status).sortOrder;
         case "notes": return r.item.notes;
         case "start": return r.item.startWeek;
         case "end": return r.item.endWeek;
@@ -92,9 +92,24 @@ export const TableView = memo(function TableView({ store, view, me }: { store: P
       const c = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "he");
       return c * sort.dir;
     });
-  }, [rows, sort, data]);
+  }, [rows, sort, data, cat]);
 
   const groupedOn = grouped && (!sort || sort.key === "domain" || sort.key === "team");
+  // מקטעים מכווצים (לפי צוות) — נשמר אישית
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set(currentPrefs(me.preferences).tableCollapsed ?? []));
+  const setCollapsedSave = (next: Set<number>) => { setCollapsed(next); savePrefs({ tableCollapsed: [...next] }); };
+  const toggleGroup = (teamId: number) => { const n = new Set(collapsed); if (n.has(teamId)) n.delete(teamId); else n.add(teamId); setCollapsedSave(n); };
+  const groupCounts = useMemo(() => { const m = new Map<number, number>(); for (const r of sorted) m.set(r.teamId, (m.get(r.teamId) ?? 0) + 1); return m; }, [sorted]);
+  const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; domainId: number; teamId: number } | null>(null);
+  // חיפוש שמאתר תכולה במקטע מכווץ — פותח את המקטע
+  useEffect(() => {
+    const h = (e: Event) => {
+      const t = (e as CustomEvent<{ teamId: number | null }>).detail.teamId;
+      setCollapsed((c) => { if (t === null || !c.has(t)) return c; const n = new Set(c); n.delete(t); savePrefs({ tableCollapsed: [...n] }); return n; });
+    };
+    window.addEventListener("wp:locate", h);
+    return () => window.removeEventListener("wp:locate", h);
+  }, []);
   const selItems = sorted.filter((r) => selected.has(r.item.id) && r.editable).map((r) => r.item);
   const allSelected = sorted.length > 0 && sorted.filter((r) => r.editable).every((r) => selected.has(r.item.id));
 
@@ -103,7 +118,8 @@ export const TableView = memo(function TableView({ store, view, me }: { store: P
   const onResize = (k: string, e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
     const x0 = e.clientX, w0 = widths[k];
-    const move = (ev: MouseEvent) => setWidths((w) => ({ ...w, [k]: Math.max(50, Math.min(800, w0 + (x0 - ev.clientX))) }));
+    const z = uiZoom();
+    const move = (ev: MouseEvent) => setWidths((w) => ({ ...w, [k]: Math.max(50, Math.min(800, w0 + (x0 - ev.clientX) / z)) }));
     const up = () => {
       window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
       if (saveWidths.current) clearTimeout(saveWidths.current);
@@ -127,13 +143,13 @@ export const TableView = memo(function TableView({ store, view, me }: { store: P
         {selItems.length > 0 && (
           <div className="mr-4 flex items-center gap-2 rounded-md bg-brand-50 px-2 py-1 text-brand-700" data-testid="bulk-bar">
             <span className="font-medium">{selItems.length} נבחרו</span>
-            <select className="input h-7 w-auto py-0 text-[12px]" value="" onChange={async (e) => { if (e.target.value) { await store.bulkUpdate(selItems, { status: e.target.value as Status }); } }} data-testid="bulk-status">
+            <select className="input h-7 w-auto py-0 text-[12px]" value="" onChange={async (e) => { if (e.target.value) { await store.bulkUpdate(selItems, { status: e.target.value }); } }} data-testid="bulk-status">
               <option value="">שינוי סטטוס…</option>
-              {STATUSES.map((s) => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
+              {cat.statuses.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
-            <select className="input h-7 w-auto py-0 text-[12px]" value="" onChange={async (e) => { if (e.target.value) { await store.bulkUpdate(selItems, { priority: e.target.value as PriorityT }); } }}>
+            <select className="input h-7 w-auto py-0 text-[12px]" value="" onChange={async (e) => { if (e.target.value) { await store.bulkUpdate(selItems, { priority: e.target.value }); } }}>
               <option value="">שינוי תיעדוף…</option>
-              {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_META[p].label}</option>)}
+              {cat.priorities.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
             </select>
             <button className="btn-ghost btn-sm" onClick={() => setSelected(new Set())}>ניקוי בחירה</button>
           </div>
@@ -173,17 +189,23 @@ export const TableView = memo(function TableView({ store, view, me }: { store: P
               lastGroup = g;
               const i = r.item;
               const cell = "border-b border-l border-ink-100 px-2 align-middle";
+              const isCollapsed = groupedOn && collapsed.has(r.teamId);
+              const headerRow = header && (
+                <tr key={`g-${g}`} data-group={r.teamId}>
+                  <td colSpan={COLS.length + 1} className="border-b border-ink-200 bg-ink-50 p-0">
+                    <button className="sticky right-0 flex items-center gap-1.5 px-3 py-1.5 text-start text-[12px] font-bold text-ink-700 hover:text-ink-900"
+                      onClick={() => toggleGroup(r.teamId)} aria-expanded={!isCollapsed} title={isCollapsed ? "הצגת התכולות" : "מזעור"}
+                      onContextMenu={(e) => { e.preventDefault(); setGroupMenu({ x: e.clientX, y: e.clientY, domainId: r.domainId, teamId: r.teamId }); }}>
+                      <ChevronDown size={14} className={clsx("text-ink-400 transition-transform", isCollapsed && "rotate-90")} />
+                      {r.domain}{r.team !== r.domain ? <span className="font-medium text-ink-500"> / {r.team}</span> : null}
+                      <span className="mr-1 font-normal text-ink-400">({groupCounts.get(r.teamId) ?? 0})</span>
+                    </button>
+                  </td>
+                </tr>
+              );
+              if (isCollapsed) return [headerRow];
               return [
-                header && (
-                  <tr key={`g-${g}`}>
-                    <td colSpan={COLS.length + 1} className="border-b border-ink-200 bg-ink-50 p-0">
-                      <div className="sticky right-0 inline-block px-3 py-1.5 text-[12px] font-bold text-ink-700">
-                        {r.domain}{r.team !== r.domain ? <span className="font-medium text-ink-500"> / {r.team}</span> : null}
-                        <span className="mr-2 font-normal text-ink-400">({sorted.filter((x) => `${x.domain} / ${x.team}` === g).length})</span>
-                      </div>
-                    </td>
-                  </tr>
-                ),
+                headerRow,
                 <tr key={i.id} className={clsx("group hover:bg-brand-50/40", selected.has(i.id) && "bg-brand-50/60")} data-item-row={i.id}>
                   <td className={clsx(cell, "sticky right-0 z-10 bg-white text-center group-hover:bg-[#f5f8ff]")} style={{ height: 34 }}>
                     <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" disabled={!r.editable} checked={selected.has(i.id)} aria-label={`בחר ${i.name}`}
@@ -191,28 +213,27 @@ export const TableView = memo(function TableView({ store, view, me }: { store: P
                   </td>
                   <td className={clsx(cell, "sticky z-10 truncate bg-white font-medium text-ink-700 group-hover:bg-[#f5f8ff]")} style={{ right: stickyRight("domain") }}>{r.domain}</td>
                   <td className={clsx(cell, "sticky z-10 truncate bg-white text-ink-700 group-hover:bg-[#f5f8ff]")} style={{ right: stickyRight("team") }}>{r.team}</td>
-                  <td className={clsx(cell, "font-mono text-[11.5px] text-ink-500")}>
-                    <button className="flex items-center gap-1 hover:text-brand-600" onClick={() => ui.openItem(i.id)} title="פתח פרטים">{i.id}<ExternalLink size={11} className="opacity-0 group-hover:opacity-100" /></button>
-                  </td>
                   <td className={cell}><NameCell item={i} editable={r.editable} store={store} onOpen={() => ui.openItem(i.id)} /></td>
                   <td className={clsx(cell, "p-0")}>
-                    <select disabled={!r.editable} value={i.priority} onChange={(e) => void store.updateItem(i, { priority: e.target.value as PriorityT })}
+                    <select disabled={!r.editable} value={i.priority} onChange={(e) => void store.updateItem(i, { priority: e.target.value })}
                       className={clsx("h-full w-full appearance-none bg-transparent px-2 py-2 outline-none", r.editable && "cursor-pointer hover:bg-ink-50")}
-                      style={{ color: i.priority === "NONE" ? "#94a3b8" : PRIORITY_META[i.priority].color, fontWeight: i.priority === "NONE" ? 400 : 600 }} aria-label="תיעדוף">
-                      {PRIORITIES.map((p) => <option key={p} value={p} style={{ color: "#0f172a" }}>{PRIORITY_META[p].label}</option>)}
+                      style={{ color: i.priority === cat.defaultPriority ? "#94a3b8" : cat.priority(i.priority).color, fontWeight: i.priority === cat.defaultPriority ? 400 : 600 }} aria-label="תיעדוף">
+                      {cat.priorities.map((p) => <option key={p.key} value={p.key} style={{ color: "#0f172a" }}>{p.label}</option>)}
+                      {!cat.priorities.some((p) => p.key === i.priority) && <option value={i.priority}>{cat.priority(i.priority).label}</option>}
                     </select>
                   </td>
                   <td className={clsx(cell, "px-1.5")}>
                     <select disabled={!r.editable} value={i.status} aria-label="סטטוס" data-testid={`status-${i.id}`}
                       onChange={(e) => {
-                        const s = e.target.value as Status;
+                        const s = e.target.value;
                         void store.updateItem(i, { status: s }).then((ok) => {
-                          if (ok && NOTE_RECOMMENDED.includes(s) && !i.notes.trim()) toast.show("info", "מומלץ להוסיף הסבר בשדה ההערות");
+                          if (ok && cat.status(s).noteRecommended && !i.notes.trim()) toast.show("info", "מומלץ להוסיף הסבר בשדה ההערות");
                         });
                       }}
                       className={clsx("h-6 w-full rounded-full border px-2 text-[12px] font-medium outline-none", r.editable ? "cursor-pointer" : "cursor-default")}
-                      style={{ background: STATUS_META[i.status].bg, color: STATUS_META[i.status].fg, borderColor: STATUS_META[i.status].border }}>
-                      {STATUSES.map((s) => <option key={s} value={s} style={{ background: "#fff", color: "#0f172a" }}>{STATUS_META[s].label}</option>)}
+                      style={{ background: cat.status(i.status).bg, color: cat.status(i.status).fg, borderColor: cat.status(i.status).border }}>
+                      {cat.statuses.map((s) => <option key={s.key} value={s.key} style={{ background: "#fff", color: "#0f172a" }}>{s.label}</option>)}
+                      {!cat.statuses.some((s) => s.key === i.status) && <option value={i.status}>{cat.status(i.status).label}</option>}
                     </select>
                   </td>
                   <td className={cell}><NotesCell item={i} editable={r.editable} store={store} /></td>
@@ -220,12 +241,26 @@ export const TableView = memo(function TableView({ store, view, me }: { store: P
                   <td className={cell}><WeekCell item={i} field="endWeek" editable={r.editable} store={store} /></td>
                   <td className={clsx(cell, "truncate text-ink-500")}>{userName(data, i.createdById)}</td>
                   <td className={clsx(cell, "truncate text-ink-500")} title={`ע״י ${userName(data, i.updatedById)}`}>{fmtTs(i.updatedAt)}</td>
+                  <td className={clsx(cell, "font-mono text-[11.5px] text-ink-500")}>
+                    <button className="flex items-center gap-1 hover:text-brand-600" onClick={() => ui.openItem(i.id)} title="פתח פרטים">{i.id}<ExternalLink size={11} className="opacity-0 group-hover:opacity-100" /></button>
+                  </td>
                 </tr>,
               ];
             })}
           </tbody>
         </table>
       </div>
+      <Floating open={!!groupMenu} point={groupMenu ?? undefined} onClose={() => setGroupMenu(null)}>
+        {groupMenu && (
+          <div className="w-[240px] p-1" onClick={() => setGroupMenu(null)} data-testid="group-menu">
+            {setView && <LabelMenu label={{ domainId: groupMenu.domainId, teamId: data.teams.find((t) => t.id === groupMenu.teamId)?.name === data.domains.find((d) => d.id === groupMenu.domainId)?.name ? null : groupMenu.teamId }}
+              data={data} view={view} setView={setView} toast={toast} />}
+            <div className="my-1 border-t border-ink-100" />
+            <MenuItem icon={<ChevronsDownUp size={14} />} onClick={() => setCollapsedSave(new Set(groupCounts.keys()))}>מזעור כל המקטעים</MenuItem>
+            <MenuItem icon={<ChevronsUpDown size={14} />} onClick={() => setCollapsedSave(new Set())}>הצגת כל המקטעים</MenuItem>
+          </div>
+        )}
+      </Floating>
     </div>
   );
 });
@@ -253,7 +288,7 @@ function NotesCell({ item, editable, store }: { item: ItemDTO; editable: boolean
   const [v, setV] = useState(item.notes);
   const ref = useRef<HTMLDivElement>(null);
   const close = () => { setOpen(false); if (v !== item.notes) void store.updateItem(item, { notes: v }); };
-  const warn = NOTE_RECOMMENDED.includes(item.status) && !item.notes.trim();
+  const warn = useCatalog().status(item.status).noteRecommended && !item.notes.trim();
   return (
     <>
       <div ref={ref} className={clsx("truncate rounded px-1 -mx-1 py-0.5", editable && "cursor-text hover:bg-ink-100", !item.notes && "text-ink-300")}

@@ -6,13 +6,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { replaceEqualDeep, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiErr } from "@/lib/api";
 import type { ItemDTO, Me, MilestoneDTO, PlanData, RowDTO, SprintDTO } from "@/lib/types";
-import type { Status, PriorityT } from "@/lib/constants";
+import { useCatalog } from "@/components/CatalogProvider";
 import { useToast } from "@/components/ui/toast";
 
 export type ItemPatch = Partial<Pick<ItemDTO, "name" | "status" | "priority" | "notes" | "startWeek" | "endWeek" | "rowId">>;
-export type NewItem = { rowId: number; name: string; startWeek: string; endWeek: string; status?: Status; priority?: PriorityT; notes?: string };
+export type NewItem = { rowId: number; name: string; startWeek: string; endWeek: string; status?: string; priority?: string; notes?: string };
 export type MsInput = { name: string; date: string; teamId: number | null; notes?: string };
-export type SprintInput = { name: string; startDate: string; endDate: string; teamId: number; notes?: string };
+export type SprintInput = { name: string; startDate: string; endDate: string; domainId: number; notes?: string };
 
 export interface PlanStore {
   kind: "live" | "draft" | "snapshot";
@@ -23,9 +23,10 @@ export interface PlanStore {
   canEditTeam: (teamId: number | null) => boolean;
   canEditCross: () => boolean;
   canEditRow: (row: RowDTO | undefined) => boolean;
+  canEditDomain: (domainId: number) => boolean;
   createItem: (v: NewItem) => Promise<ItemDTO | null>;
   updateItem: (item: ItemDTO, patch: ItemPatch, opts?: { undoLabel?: string; silent?: boolean }) => Promise<boolean>;
-  bulkUpdate: (items: ItemDTO[], patch: { status?: Status; priority?: PriorityT }) => Promise<boolean>;
+  bulkUpdate: (items: ItemDTO[], patch: { status?: string; priority?: string }) => Promise<boolean>;
   deleteItem: (item: ItemDTO) => Promise<void>;
   createRow: (teamId: number, anchorRowId?: number, position?: "above" | "below") => Promise<number | null>;
   deleteRow: (row: RowDTO, opts?: { silent?: boolean }) => Promise<void>;
@@ -60,7 +61,8 @@ function makePerms(me: Me, data: PlanData | undefined, readOnly: boolean) {
   };
   const canEditCross = () => !readOnly && (me.role === "SUPER" || me.canEditCross);
   const canEditRow = (row: RowDTO | undefined) => !!row && (row.kind === "TEAM" ? canEditTeam(row.teamId) : canEditCross());
-  return { canEditTeam, canEditCross, canEditRow };
+  const canEditDomain = (domainId: number) => !readOnly && (me.role === "SUPER" || me.domainIds.includes(domainId));
+  return { canEditTeam, canEditCross, canEditRow, canEditDomain };
 }
 
 type UndoOp = { label: string; run: () => Promise<boolean>; done?: boolean };
@@ -329,6 +331,7 @@ export function readOnlyStore(me: Me, data: PlanData | undefined, loading: boole
 // ---------------------------------------------------------------------------
 export function useDraftPlan(me: Me, initial: PlanData | undefined) {
   const toast = useToast();
+  const cat = useCatalog();
   const [data, setDataState] = useState<PlanData | undefined>(initial);
   const [dirty, setDirty] = useState(false);
   const history = useRef<PlanData[]>([]);
@@ -361,7 +364,7 @@ export function useDraftPlan(me: Me, initial: PlanData | undefined) {
       const row = d.rows.find((r) => r.id === v.rowId)!;
       const it: ItemDTO = {
         id: nid(), name: v.name, rowId: v.rowId, teamId: row.teamId, startWeek: v.startWeek, endWeek: v.endWeek,
-        status: v.status ?? "PLANNED", priority: v.priority ?? "NONE", notes: v.notes ?? "", version: 1,
+        status: v.status ?? cat.defaultStatus, priority: v.priority ?? cat.defaultPriority, notes: v.notes ?? "", version: 1,
         createdAt: now(), createdById: me.id, updatedAt: now(), updatedById: me.id,
       };
       commit((d) => ({ ...d, items: [...d.items, it] }));
@@ -408,6 +411,6 @@ export function useDraftPlan(me: Me, initial: PlanData | undefined) {
       if (prev) { dataRef.current = prev; setDataState(prev); toast.show("info", "הפעולה בוטלה"); }
     },
     refresh: () => {},
-  }), [data, toast]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [data, toast, cat]); // eslint-disable-line react-hooks/exhaustive-deps
   return { store, dirty, setDirty };
 }

@@ -13,13 +13,39 @@ import {
 
 export const userRole = pgEnum("user_role", ["SUPER", "USER"]);
 export const accountStatus = pgEnum("account_status", ["PENDING", "APPROVED", "REJECTED", "SUSPENDED"]);
-export const itemStatus = pgEnum("item_status", [
-  "PLANNED", "IN_PROGRESS", "DONE", "DONE_UNPLANNED", "BLOCKED", "WAITING", "POSTPONED", "CANCELLED",
-]);
-export const priority = pgEnum("priority", ["NONE", "CRITICAL", "HIGH", "MEDIUM", "LOW"]);
 export const rowKind = pgEnum("row_kind", ["TEAM", "INFLUENCE", "CROSS_EVENT"]);
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
+
+// קטלוג סטטוסים ותיעדופים — ניתן לעריכה ע"י מנהל המערכת. המפתח (key) קבוע; שם וצבע ניתנים לשינוי.
+export const statuses = pgTable("statuses", {
+  key: varchar("key", { length: 40 }).primaryKey(),
+  label: text("label").notNull(),
+  bg: varchar("bg", { length: 9 }).notNull(),
+  fg: varchar("fg", { length: 9 }).notNull(),
+  border: varchar("border", { length: 9 }).notNull(),
+  // planned / active / done / done_unplanned / cancelled / other — משמעות עסקית לחישובים
+  category: varchar("category", { length: 20 }).notNull().default("other"),
+  noteRecommended: boolean("note_recommended").notNull().default(false),
+  sortOrder: integer("sort_order").notNull(),
+  isDefault: boolean("is_default").notNull().default(false),
+  // "מחיקה" = ארכוב: לא מוצג לבחירה, אבל תמונות מצב ישנות ממשיכות להציג את שמו וצבעו
+  archived: boolean("archived").notNull().default(false),
+  replacedBy: varchar("replaced_by", { length: 40 }), // לאן הועברו התכולות במחיקה (לסנכרון לסביבות אחרות)
+}, (t) => [
+  uniqueIndex("statuses_one_default").on(t.isDefault).where(sql`${t.isDefault}`),
+  check("statuses_category_chk", sql`${t.category} in ('planned','active','done','done_unplanned','cancelled','other')`),
+]);
+
+export const priorities = pgTable("priorities", {
+  key: varchar("key", { length: 40 }).primaryKey(),
+  label: text("label").notNull(),
+  color: varchar("color", { length: 9 }).notNull(),
+  sortOrder: integer("sort_order").notNull(),
+  isDefault: boolean("is_default").notNull().default(false),
+  archived: boolean("archived").notNull().default(false),
+  replacedBy: varchar("replaced_by", { length: 40 }),
+}, (t) => [uniqueIndex("priorities_one_default").on(t.isDefault).where(sql`${t.isDefault}`)]);
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -111,8 +137,8 @@ export const workItems = pgTable("work_items", {
   teamId: integer("team_id").references(() => teams.id), // נגזר מהשורה; null לפריט רוחבי
   startWeek: date("start_week", { mode: "string" }).notNull(), // יום ראשון של שבוע ההתחלה
   endWeek: date("end_week", { mode: "string" }).notNull(), // יום ראשון של שבוע הסיום
-  status: itemStatus("status").notNull().default("PLANNED"),
-  priority: priority("priority").notNull().default("NONE"),
+  status: varchar("status", { length: 40 }).notNull().references(() => statuses.key, { onUpdate: "cascade" }),
+  priority: varchar("priority", { length: 40 }).notNull().references(() => priorities.key, { onUpdate: "cascade" }),
   notes: text("notes").notNull().default(""),
   version: integer("version").notNull().default(1),
   createdAt: ts("created_at").notNull().defaultNow(),
@@ -124,6 +150,8 @@ export const workItems = pgTable("work_items", {
 }, (t) => [
   index("work_items_row_idx").on(t.rowId, t.deletedAt),
   index("work_items_team_idx").on(t.teamId),
+  index("work_items_status_idx").on(t.status),
+  index("work_items_priority_idx").on(t.priority),
   check("work_items_range_chk", sql`${t.endWeek} >= ${t.startWeek}`),
   check("work_items_sunday_chk", sql`extract(dow from ${t.startWeek}) = 0 AND extract(dow from ${t.endWeek}) = 0`),
 ]);
@@ -147,7 +175,7 @@ export const sprints = pgTable("sprints", {
   name: text("name").notNull(),
   startDate: date("start_date", { mode: "string" }).notNull(),
   endDate: date("end_date", { mode: "string" }).notNull(),
-  teamId: integer("team_id").notNull().references(() => teams.id),
+  domainId: integer("domain_id").notNull().references(() => domains.id), // ספרינט שייך לתחום כולו (לא לצוות)
   notes: text("notes").notNull().default(""),
   version: integer("version").notNull().default(1),
   createdAt: ts("created_at").notNull().defaultNow(),
@@ -165,9 +193,11 @@ export const snapshots = pgTable("snapshots", {
   asOfDate: date("as_of_date", { mode: "string" }).notNull().default(sql`CURRENT_DATE`),
   createdAt: ts("created_at").notNull().defaultNow(),
   createdById: integer("created_by_id").notNull().references(() => users.id),
+  // null = תמונת מצב משותפת (מנהל המערכת); מזהה משתמש = תמונת מצב אישית, גלויה רק לבעליה
+  ownerId: integer("owner_id").references(() => users.id, { onDelete: "cascade" }),
   currentRevisionId: integer("current_revision_id"),
   deletedAt: ts("deleted_at"),
-});
+}, (t) => [index("snapshots_owner_idx").on(t.ownerId)]);
 
 // כל Revision הוא עותק מלא ובלתי משתנה של נתוני התוכנית (SnapshotData)
 export const snapshotRevisions = pgTable("snapshot_revisions", {
@@ -203,3 +233,10 @@ export const auditLogs = pgTable("audit_logs", {
   index("audit_entity_idx").on(t.entityType, t.entityId),
   index("audit_at_idx").on(t.at),
 ]);
+
+// הגדרות מערכת כלליות (מפתח/ערך) — למשל איזו גרסה של קובץ ההגדרות (config/catalog.json) כבר הוחלה
+export const appSettings = pgTable("app_settings", {
+  key: varchar("key", { length: 80 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});

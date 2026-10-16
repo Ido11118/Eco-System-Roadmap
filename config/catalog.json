@@ -1,0 +1,155 @@
+{
+  "statuses": [
+    {
+      "key": "PLANNED",
+      "label": "מתוכנן",
+      "bg": "#ffffff",
+      "fg": "#334155",
+      "border": "#b8c0cc",
+      "category": "planned",
+      "noteRecommended": false,
+      "sortOrder": 10,
+      "isDefault": true,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "IN_PROGRESS",
+      "label": "בביצוע",
+      "bg": "#f59e0b",
+      "fg": "#3b2300",
+      "border": "#d48806",
+      "category": "active",
+      "noteRecommended": false,
+      "sortOrder": 20,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "DONE",
+      "label": "בוצע",
+      "bg": "#15803d",
+      "fg": "#ffffff",
+      "border": "#116b33",
+      "category": "done",
+      "noteRecommended": false,
+      "sortOrder": 30,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "DONE_UNPLANNED",
+      "label": "בוצע ולא תוכנן",
+      "bg": "#86efac",
+      "fg": "#14532d",
+      "border": "#4ade80",
+      "category": "done_unplanned",
+      "noteRecommended": false,
+      "sortOrder": 40,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "BLOCKED",
+      "label": "חסום / קיימת בעיה",
+      "bg": "#dc2626",
+      "fg": "#ffffff",
+      "border": "#b91c1c",
+      "category": "active",
+      "noteRecommended": false,
+      "sortOrder": 50,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "WAITING",
+      "label": "ממתין לצוות אחר",
+      "bg": "#7dd3fc",
+      "fg": "#0c4a6e",
+      "border": "#38bdf8",
+      "category": "active",
+      "noteRecommended": false,
+      "sortOrder": 60,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "POSTPONED",
+      "label": "נדחה",
+      "bg": "#fde047",
+      "fg": "#4d3d00",
+      "border": "#eab308",
+      "category": "active",
+      "noteRecommended": false,
+      "sortOrder": 70,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "CANCELLED",
+      "label": "בוטל",
+      "bg": "#52525b",
+      "fg": "#f4f4f5",
+      "border": "#3f3f46",
+      "category": "cancelled",
+      "noteRecommended": false,
+      "sortOrder": 80,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    }
+  ],
+  "priorities": [
+    {
+      "key": "NONE",
+      "label": "ללא",
+      "color": "#94a3b8",
+      "sortOrder": 0,
+      "isDefault": true,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "CRITICAL",
+      "label": "קריטי",
+      "color": "#dc2626",
+      "sortOrder": 10,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "HIGH",
+      "label": "גבוה",
+      "color": "#ea580c",
+      "sortOrder": 20,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "MEDIUM",
+      "label": "בינוני",
+      "color": "#ca8a04",
+      "sortOrder": 30,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    },
+    {
+      "key": "LOW",
+      "label": "נמוך",
+      "color": "#64748b",
+      "sortOrder": 40,
+      "isDefault": false,
+      "archived": false,
+      "replacedBy": null
+    }
+  ]
+}

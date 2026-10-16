@@ -1,6 +1,6 @@
 // השוואת תכנון (המצב המוקדם) מול ביצוע (המצב המאוחר) — לוגיקה טהורה, ללא תלות ב-UI או בבסיס הנתונים.
 // ההתאמה מתבצעת אך ורק לפי ID קבוע של תכולה.
-import { COMPLETED_STATUSES, type Status } from "./constants";
+import { DEFAULT_CATALOG_OBJ, type StatusCategory } from "./catalog";
 import type { ItemDTO, PlanData, RowDTO } from "./types";
 import { weeksDiff, type ISODate } from "./weeks";
 
@@ -28,8 +28,8 @@ export type CompareUnit = {
   rowId: number; // שורת ההעדפה לתצוגה
   rowKind: RowDTO["kind"]; // סוג שורת התצוגה (נוכחית אם קיימת)
   planRowKind: RowDTO["kind"] | null; // סוג השורה ב-Snapshot (קובע השתייכות ל-Baseline בסיכום)
-  plan: (Range & { status: Status; name: string; teamId: number | null; rowId: number }) | null;
-  actual: (Range & { status: Status; name: string; teamId: number | null; rowId: number; item: ItemDTO }) | null;
+  plan: (Range & { status: string; name: string; teamId: number | null; rowId: number }) | null;
+  actual: (Range & { status: string; name: string; teamId: number | null; rowId: number; item: ItemDTO }) | null;
   tags: ChangeTag[];
   startDelta: number | null; // בשבועות; חיובי = מאוחר יותר
   endDelta: number | null;
@@ -72,16 +72,19 @@ export function describeUnit(u: Omit<CompareUnit, "description">): string {
   return parts.join(" ");
 }
 
-export function classify(plan: ItemDTO | undefined, actual: ItemDTO | undefined): {
+/** סיווג סטטוס לפי המשמעות העסקית שלו (מוגדרת בקטלוג) — לא לפי שמו */
+export type CategoryOf = (statusKey: string) => StatusCategory;
+const defaultCat: CategoryOf = DEFAULT_CATALOG_OBJ.category;
+
+export function classify(plan: ItemDTO | undefined, actual: ItemDTO | undefined, cat: CategoryOf = defaultCat): {
   tags: ChangeTag[]; startDelta: number | null; endDelta: number | null; durationDelta: number | null;
 } {
   const tags: ChangeTag[] = [];
   if (!plan && actual) {
     tags.push("added");
-    if (COMPLETED_STATUSES.includes(actual.status) || actual.status === "DONE_UNPLANNED") {
-      tags.push("completed", "completedUnplanned");
-    }
-    if (actual.status === "CANCELLED") tags.push("cancelled");
+    const c = cat(actual.status);
+    if (c === "done" || c === "done_unplanned") tags.push("completed", "completedUnplanned");
+    if (c === "cancelled") tags.push("cancelled");
     return { tags, startDelta: null, endDelta: null, durationDelta: null };
   }
   if (plan && !actual) {
@@ -100,8 +103,9 @@ export function classify(plan: ItemDTO | undefined, actual: ItemDTO | undefined)
   else tags.push("advanced");
   if (dd > 0) tags.push("extended");
   if (dd < 0) tags.push("shortened");
-  if (a.status === "CANCELLED") tags.push("cancelled");
-  else if (COMPLETED_STATUSES.includes(a.status)) tags.push("completed"); // תכולה מתוכננת אינה "הושלמה ולא תוכננה"
+  const ac = cat(a.status);
+  if (ac === "cancelled") tags.push("cancelled");
+  else if (ac === "done" || ac === "done_unplanned") tags.push("completed"); // תכולה מתוכננת אינה "הושלמה ולא תוכננה"
   else tags.push("notCompleted");
   if (p.teamId !== a.teamId) tags.push("moved");
   if (p.name !== a.name) tags.push("renamed");
@@ -109,7 +113,7 @@ export function classify(plan: ItemDTO | undefined, actual: ItemDTO | undefined)
 }
 
 /** איחוד תכולות משני המצבים לפי ID */
-export function buildCompareUnits(baseline: PlanData, current: PlanData): CompareUnit[] {
+export function buildCompareUnits(baseline: PlanData, current: PlanData, cat: CategoryOf = defaultCat): CompareUnit[] {
   const planById = new Map(baseline.items.map((i) => [i.id, i]));
   const curById = new Map(current.items.map((i) => [i.id, i]));
   const rowKind = new Map<number, RowDTO["kind"]>();
@@ -120,7 +124,7 @@ export function buildCompareUnits(baseline: PlanData, current: PlanData): Compar
   for (const id of [...ids].sort((a, b) => a - b)) {
     const p = planById.get(id);
     const a = curById.get(id);
-    const c = classify(p, a);
+    const c = classify(p, a, cat);
     const base = {
       id,
       name: (a ?? p)!.name,
@@ -256,8 +260,8 @@ export function groupKeyOf(u: Pick<CompareUnit, "teamId" | "rowKind">) {
   return u.rowKind === "TEAM" ? `team:${u.teamId}` : `cross:${u.rowKind}`;
 }
 
-export function buildCompareLayout(baseline: PlanData, current: PlanData, filter?: (u: CompareUnit) => boolean): CompareLayout {
-  const all = buildCompareUnits(baseline, current);
+export function buildCompareLayout(baseline: PlanData, current: PlanData, filter?: (u: CompareUnit) => boolean, cat: CategoryOf = defaultCat): CompareLayout {
+  const all = buildCompareUnits(baseline, current, cat);
   const units = filter ? all.filter(filter) : all;
   // שורת התצוגה: שורה נוכחית אם קיימת, אחרת שורת ה-Snapshot
   const curRowIds = new Set(current.rows.map((r) => r.id));

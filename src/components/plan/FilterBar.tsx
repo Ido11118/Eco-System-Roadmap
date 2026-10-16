@@ -1,59 +1,132 @@
 "use client";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
-  Search, ChevronRight, ChevronLeft, CalendarClock, SlidersHorizontal, Bookmark, Check, Star, Trash2, Pencil, X, RotateCcw,
+  Search, ChevronRight, ChevronLeft, SlidersHorizontal, Bookmark, Check, Star, Trash2, Pencil, X, RotateCcw,
+  RectangleHorizontal, Diamond, Flag,
 } from "lucide-react";
 import type { PlanData, TimeFilter, ViewConfig } from "@/lib/types";
-import { STATUSES, STATUS_META, PRIORITIES, PRIORITY_META } from "@/lib/constants";
-import { isISODate, todayIL, quarterOf } from "@/lib/weeks";
+import { useCatalog } from "@/components/CatalogProvider";
+import { isISODate, todayIL, quarterOf, weekNumber, weekYear } from "@/lib/weeks";
 import { api } from "@/lib/api";
 import { MultiSelect, Floating } from "@/components/ui/popover";
+import { useTooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/dialog";
 import { shiftTime, timeLabel, defaultViewConfig } from "./filters";
-import { sanitizeView } from "./prefs";
+import { sanitizeView, TEXT_SIZES, useTextSize } from "./prefs";
+import { useMe } from "./ui";
 
 export type SavedView = { id: number; name: string; config: ViewConfig; isDefault: boolean };
 
-export function FilterBar({ data, view, setView, onToday, mode }: {
+export function FilterBar({ data, view, setView, onToday, mode, onLocate }: {
   data: PlanData; view: ViewConfig; setView: (v: ViewConfig) => void; onToday: () => void; mode: "gantt" | "table" | "compare";
+  onLocate?: (itemId: number) => void;
 }) {
+  const cat = useCatalog();
   const domainOpts = data.domains.map((d) => ({ value: d.id, label: d.name }));
   const teamOpts = data.teams
     .filter((t) => view.domainIds.length === 0 || view.domainIds.includes(t.domainId))
     .map((t) => ({ value: t.id, label: t.name, group: data.domains.find((d) => d.id === t.domainId)?.name }));
   const active = view.domainIds.length + view.teamIds.length + view.statuses.length + view.priorities.length + (view.search ? 1 : 0) + (view.time.kind !== "all" ? 1 : 0);
   return (
-    <div className="flex flex-wrap items-center gap-1.5 border-b border-ink-200 bg-white px-4 py-2" data-testid="filter-bar">
-      <div className="relative">
-        <Search size={14} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ink-400" />
-        <input className="input h-7 w-[200px] pr-7 text-[12.5px]" placeholder="חיפוש בשם ובהערות…" value={view.search}
-          onChange={(e) => setView({ ...view, search: e.target.value })} data-testid="search" />
-      </div>
+    // שורה אחת, זהה בגאנט ובטבלה (ההבדל היחיד: כפתורי השכבות בגאנט). כשאין מקום — שדה החיפוש מתכווץ, לא נוספת שורה.
+    <div className="flex flex-nowrap items-center gap-1.5 border-b border-ink-200 bg-white px-4 py-2 [&>*]:shrink-0 [&>.search-box]:shrink" data-testid="filter-bar">
+      <SearchBox data={data} value={view.search} onChange={(q) => setView({ ...view, search: q })} onLocate={onLocate} />
       <MultiSelect label="תחום" options={domainOpts} value={view.domainIds}
         onChange={(v) => setView({ ...view, domainIds: v, teamIds: view.teamIds.filter((t) => { const dom = data.teams.find((x) => x.id === t)?.domainId; return dom !== undefined && (v.length === 0 || v.includes(dom)); }) })} />
       <MultiSelect label="צוות" options={teamOpts} value={view.teamIds} groups onChange={(v) => setView({ ...view, teamIds: v })} />
-      <MultiSelect label="סטטוס" options={STATUSES.map((s) => ({ value: s, label: STATUS_META[s].label }))} value={view.statuses}
+      <MultiSelect label="סטטוס" options={cat.statuses.map((s) => ({ value: s.key, label: s.label }))} value={view.statuses}
         onChange={(v) => setView({ ...view, statuses: v })}
-        renderOption={(o) => <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border" style={{ background: STATUS_META[o.value].bg, borderColor: STATUS_META[o.value].border }} />{o.label}</span>} />
-      <MultiSelect label="תיעדוף" options={PRIORITIES.map((p) => ({ value: p, label: PRIORITY_META[p].label }))} value={view.priorities}
+        renderOption={(o) => <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border" style={{ background: cat.status(o.value).bg, borderColor: cat.status(o.value).border }} />{o.label}</span>} />
+      <MultiSelect label="תיעדוף" options={cat.priorities.map((p) => ({ value: p.key, label: p.label }))} value={view.priorities}
         onChange={(v) => setView({ ...view, priorities: v })} width={170} />
-      <span className="mx-1 h-5 w-px bg-ink-200" />
+      <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
       <TimeControl value={view.time} onChange={(t) => setView({ ...view, time: t })} />
-      {mode !== "table" && (
-        <button className="btn-secondary btn-sm" onClick={onToday} data-testid="go-today"><CalendarClock size={13} />חזרה להיום</button>
-      )}
+      {mode === "gantt" && <>
+        <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
+        <LayerToggles view={view} setView={setView} mode={mode} />
+      </>}
       {active > 0 && (
-        <button className="btn-ghost btn-sm text-ink-500" onClick={() => setView({ ...defaultViewConfig(), showMilestones: view.showMilestones, showSprints: view.showSprints, density: view.density })}>
-          <RotateCcw size={12} />ניקוי מסננים
+        <button className="btn-ghost btn-sm shrink-0 text-ink-500" aria-label="ניקוי מסננים" title="ניקוי מסננים"
+          onClick={() => setView({ ...defaultViewConfig(), showItems: view.showItems, showMilestones: view.showMilestones, showSprints: view.showSprints, density: view.density })}>
+          <RotateCcw size={12} />ניקוי
         </button>
       )}
-      <div className="mr-auto flex items-center gap-1.5">
+      <div className="mr-auto flex shrink-0 items-center gap-1.5">
         <DisplayOptions view={view} setView={setView} mode={mode} />
         <SavedViews view={view} setView={setView} data={data} />
       </div>
+    </div>
+  );
+}
+
+/** חיפוש: מסנן (מעמעם בגאנט / מסתיר בטבלה) ומציג רשימת תוצאות — בחירה בתוצאה מאתרת את התכולה במסך */
+function SearchBox({ data, value, onChange, onLocate }: {
+  data: PlanData; value: string; onChange: (q: string) => void; onLocate?: (itemId: number) => void;
+}) {
+  const cat = useCatalog();
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
+  const q = value.trim().toLowerCase();
+  const results = useMemo(() => {
+    if (!q) return [];
+    const teamName = new Map(data.teams.map((t) => [t.id, t]));
+    const domName = new Map(data.domains.map((d) => [d.id, d.name]));
+    return data.items
+      .filter((i) => i.name.toLowerCase().includes(q) || i.notes.toLowerCase().includes(q) || String(i.id) === q)
+      .sort((a, b) => Number(!a.name.toLowerCase().includes(q)) - Number(!b.name.toLowerCase().includes(q)) || a.startWeek.localeCompare(b.startWeek))
+      .slice(0, 12)
+      .map((i) => {
+        const t = i.teamId ? teamName.get(i.teamId) : undefined;
+        const place = t ? (domName.get(t.domainId) === t.name ? t.name : `${domName.get(t.domainId)} / ${t.name}`) : "רוחבי";
+        return { item: i, place };
+      });
+  }, [q, data]);
+  useEffect(() => { setHi(0); }, [q]);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [open]);
+  const go = (id: number) => { setOpen(false); onLocate?.(id); };
+  return (
+    <div ref={ref} className="search-box relative min-w-[120px]">
+      <Search size={14} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ink-400" />
+      <input className="input h-7 w-[200px] max-w-full pr-7 text-[12.5px]" placeholder="חיפוש תכולה (שם, הערות, ID)…" value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} data-testid="search"
+        onBlur={() => setTimeout(() => setOpen(false), 120) /* יציאה מהשדה סוגרת את הרשימה — שלא תסתיר כפתורים */}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, results.length - 1)); }
+          if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+          if (e.key === "Enter" && results[hi]) { e.preventDefault(); go(results[hi].item.id); }
+          if (e.key === "Escape") setOpen(false);
+        }} />
+      {value && <button className="absolute left-1.5 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700" onClick={() => onChange("")} aria-label="ניקוי חיפוש"><X size={13} /></button>}
+      {open && q && onLocate && (
+        <div className="anim-in absolute right-0 top-8 z-[90] w-[340px] overflow-hidden rounded-lg border border-ink-200 bg-white shadow-pop" data-testid="search-results">
+          {results.length === 0 ? <div className="px-3 py-2.5 text-[12.5px] text-ink-400">לא נמצאו תכולות</div> : (
+            <ul className="max-h-[320px] overflow-auto py-1">
+              {results.map((r, i) => (
+                <li key={r.item.id}>
+                  <button onMouseEnter={() => setHi(i)} onMouseDown={(e) => e.preventDefault() /* שומר פוקוס בשדה עד הבחירה */} onClick={() => go(r.item.id)} data-result={r.item.id}
+                    className={clsx("flex w-full items-center gap-2 px-3 py-1.5 text-start", i === hi && "bg-brand-50")}>
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-sm border" style={{ background: cat.status(r.item.status).bg, borderColor: cat.status(r.item.status).border }} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12.5px] font-medium text-ink-900">{r.item.name}</span>
+                      <span className="block truncate text-[11px] text-ink-500">{r.place} · שבועות {weekNumber(r.item.startWeek)}–{weekNumber(r.item.endWeek)} · {weekYear(r.item.startWeek)}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="border-t border-ink-100 bg-ink-50/60 px-3 py-1 text-[10.5px] text-ink-400"><span className="kbd">Enter</span> מעבר לתכולה · <span className="kbd">↑↓</span> בחירה</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -123,38 +196,64 @@ function TimeControl({ value, onChange }: { value: TimeFilter; onChange: (t: Tim
   );
 }
 
+/** הצגה/הסתרה של שכבות בגאנט: תכולות, אבני דרך, ספרינטים */
+function LayerToggles({ view, setView, mode }: { view: ViewConfig; setView: (v: ViewConfig) => void; mode: string }) {
+  const tip = useTooltip();
+  const layers = [
+    { key: "showItems" as const, on: view.showItems !== false, label: "תכולות", icon: <RectangleHorizontal size={14} />, cls: "border-brand-500 bg-brand-50 text-brand-700", testid: "toggle-items" },
+    { key: "showMilestones" as const, on: view.showMilestones, label: "אבני דרך", icon: <Diamond size={13} />, cls: "border-violet-500 bg-violet-50 text-violet-700", testid: "toggle-milestones" },
+    { key: "showSprints" as const, on: view.showSprints, label: "ספרינטים", icon: <Flag size={13} />, cls: "border-teal-500 bg-teal-50 text-teal-700", testid: "toggle-sprints" },
+  ];
+  if (mode !== "gantt") return null; // בטבלה ובהשוואה מוצגות תכולות בלבד
+  return (
+    <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-ink-200 p-0.5" role="group" aria-label="שכבות בגאנט: תכולות, אבני דרך, ספרינטים">
+      {layers.map((l) => (
+        <button key={l.key} type="button" aria-pressed={l.on} aria-label={`${l.on ? "הסתר" : "הצג"} ${l.label}`} data-testid={l.testid}
+          onClick={(e) => { setView({ ...view, [l.key]: !l.on }); tip.show(`${l.on ? "הצג" : "הסתר"} ${l.label}`, e, { anchor: e.currentTarget, placement: "top" }); }}
+          onMouseEnter={(e) => tip.show(`${l.on ? "הסתר" : "הצג"} ${l.label}`, e, { anchor: e.currentTarget, placement: "top", delay: 250 })}
+          onMouseLeave={tip.hide}
+          className={clsx("relative flex h-6 w-7 items-center justify-center rounded border transition",
+            l.on ? l.cls : "border-transparent text-ink-300 hover:bg-ink-50 hover:text-ink-600")}>
+          {l.icon}
+          {!l.on && <span className="pointer-events-none absolute h-px w-4 rotate-[-35deg] bg-ink-300" />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v: ViewConfig) => void; mode: string }) {
   const [open, setOpen] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
-  const Toggle = ({ on, label, onClick, testid }: { on: boolean; label: string; onClick: () => void; testid?: string }) => (
-    <button className="flex w-full items-center justify-between rounded-md px-2 py-1.5 hover:bg-ink-100" onClick={onClick} data-testid={testid}>
-      <span>{label}</span>
-      <span className={clsx("relative h-4 w-7 rounded-full transition", on ? "bg-brand-600" : "bg-ink-300")}>
-        <span className={clsx("absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all", on ? "left-0.5" : "left-3.5")} />
-      </span>
-    </button>
+  const me = useMe();
+  const [textSize, setTextSize] = useTextSize(me?.preferences ?? {});
+  const Seg = <T extends string>({ value, options, onChange, testid }: { value: T; options: { key: T; label: string }[]; onChange: (v: T) => void; testid: string }) => (
+    <div className="flex gap-1" data-testid={testid}>
+      {options.map((o) => (
+        <button key={o.key} onClick={() => onChange(o.key)} data-value={o.key}
+          className={clsx("flex-1 rounded border px-1 py-1 text-[12px]", value === o.key ? "border-brand-500 bg-brand-50 text-brand-700" : "border-ink-200 hover:bg-ink-50")}>
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
   return (
     <>
-      <button ref={btn} className="btn-secondary btn-sm" onClick={() => setOpen((o) => !o)} data-testid="display-options"><SlidersHorizontal size={13} />אפשרויות תצוגה</button>
+      <button ref={btn} className="btn-secondary btn-sm" onClick={() => setOpen((o) => !o)} data-testid="display-options" title="אפשרויות תצוגה: גודל תצוגה וצפיפות"><SlidersHorizontal size={13} />תצוגה</button>
       <Floating anchor={btn.current} open={open} onClose={() => setOpen(false)} align="end">
-        <div className="w-[240px] p-1.5 text-[13px]">
-          <Toggle on={view.showMilestones} label="הצג אבני דרך" onClick={() => setView({ ...view, showMilestones: !view.showMilestones })} testid="toggle-milestones" />
-          <Toggle on={view.showSprints} label="הצג ספרינטים" onClick={() => setView({ ...view, showSprints: !view.showSprints })} testid="toggle-sprints" />
+        <div className="w-[260px] space-y-3 p-3 text-[13px]">
+          <div>
+            <div className="label">גודל תצוגה (טקסט וכל הממשק)</div>
+            <Seg value={textSize} options={TEXT_SIZES} onChange={setTextSize} testid="text-size" />
+          </div>
           {mode !== "table" && (
-            <div className="mt-1 border-t border-ink-100 px-2 pt-2">
-              <div className="label">צפיפות</div>
-              <div className="flex gap-1">
-                {(["compact", "normal", "wide"] as const).map((d) => (
-                  <button key={d} onClick={() => setView({ ...view, density: d })}
-                    className={clsx("flex-1 rounded border px-1 py-1 text-[12px]", view.density === d ? "border-brand-500 bg-brand-50 text-brand-700" : "border-ink-200 hover:bg-ink-50")}>
-                    {d === "compact" ? "צפופה" : d === "normal" ? "רגילה" : "מרווחת"}
-                  </button>
-                ))}
-              </div>
+            <div>
+              <div className="label">צפיפות הגאנט (רוחב שבוע וגובה שורה)</div>
+              <Seg value={view.density} onChange={(d) => setView({ ...view, density: d })} testid="density"
+                options={[{ key: "compact", label: "צפופה" }, { key: "normal", label: "רגילה" }, { key: "wide", label: "מרווחת" }]} />
             </div>
           )}
-          <p className="px-2 pb-1 pt-2 text-[11px] text-ink-400">ההגדרות נשמרות באופן אישי ואינן משפיעות על משתמשים אחרים.</p>
+          <p className="text-[11px] text-ink-400">ההגדרות נשמרות באופן אישי ואינן משפיעות על משתמשים אחרים. הצגת אבני דרך וספרינטים — בכפתורי &quot;הצג&quot; בשורת הסינון.</p>
         </div>
       </Floating>
     </>
@@ -179,7 +278,7 @@ function SavedViews({ view, setView, data }: { view: ViewConfig; setView: (v: Vi
   };
   return (
     <>
-      <button ref={btn} className="btn-secondary btn-sm" onClick={() => setOpen((o) => !o)} data-testid="saved-views"><Bookmark size={13} />תצוגות שמורות</button>
+      <button ref={btn} className="btn-secondary btn-sm" onClick={() => setOpen((o) => !o)} data-testid="saved-views" title="תצוגות שמורות"><Bookmark size={13} />שמורות</button>
       <Floating anchor={btn.current} open={open} onClose={() => { setOpen(false); setRenaming(null); }} align="end">
         <div className="w-[300px] p-2 text-[13px]">
           <div className="max-h-[260px] overflow-auto">
