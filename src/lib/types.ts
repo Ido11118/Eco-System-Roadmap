@@ -22,8 +22,9 @@ export type ItemDTO = {
   updatedById: number | null;
 };
 
+/** שיוך אבן דרך: teamId = צוות; domainId = תחום שלם; שניהם null = רוחבי (כל הארגון) */
 export type MilestoneDTO = {
-  id: number; name: string; date: ISODate; teamId: number | null; notes: string; version: number;
+  id: number; name: string; date: ISODate; teamId: number | null; domainId: number | null; notes: string; version: number;
   createdById: number | null; createdAt: string; updatedAt: string; updatedById: number | null;
 };
 

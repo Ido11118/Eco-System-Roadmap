@@ -10,17 +10,21 @@ export function Dialog({
   open: boolean; onClose: () => void; title: React.ReactNode; children: React.ReactNode; footer?: React.ReactNode; width?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // onClose מגיע לרוב כפונקציה חדשה בכל רינדור — שומרים אותו ב-ref, כדי שהאפקט ירוץ רק בפתיחה ובסגירה.
+  // (אחרת כל הקלדה בחלון הריצה אותו מחדש: הפוקוס קפץ לשדה הראשון והחלון נגלל אליו)
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     if (!open) return;
     const prevFocus = document.activeElement as HTMLElement | null; // החזרת פוקוס בסגירה
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onCloseRef.current(); } };
     window.addEventListener("keydown", onKey, true);
     const t = setTimeout(() => {
       const el = ref.current?.querySelector<HTMLElement>("[data-autofocus], input:not([type=checkbox]), textarea, select");
       el?.focus();
     }, 20);
     return () => { window.removeEventListener("keydown", onKey, true); clearTimeout(t); prevFocus?.focus?.(); };
-  }, [open, onClose]);
+  }, [open]);
   if (!open || typeof document === "undefined") return null;
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-start justify-center bg-ink-900/30 pt-[10vh] px-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>

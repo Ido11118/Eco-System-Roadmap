@@ -160,7 +160,9 @@ export const milestones = pgTable("milestones", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   date: date("date", { mode: "string" }).notNull(),
-  teamId: integer("team_id").references(() => teams.id), // null = רוחבי
+  // שיוך: צוות (team_id) / תחום שלם (domain_id) / רוחבי לכל הארגון (שניהם null) — לעולם לא שניהם
+  teamId: integer("team_id").references(() => teams.id),
+  domainId: integer("domain_id").references(() => domains.id),
   notes: text("notes").notNull().default(""),
   version: integer("version").notNull().default(1),
   createdAt: ts("created_at").notNull().defaultNow(),
@@ -168,7 +170,9 @@ export const milestones = pgTable("milestones", {
   updatedAt: ts("updated_at").notNull().defaultNow(),
   updatedById: integer("updated_by_id"),
   deletedAt: ts("deleted_at"),
-});
+}, (t) => [
+  check("milestones_scope_chk", sql`${t.teamId} IS NULL OR ${t.domainId} IS NULL`),
+]);
 
 export const sprints = pgTable("sprints", {
   id: serial("id").primaryKey(),

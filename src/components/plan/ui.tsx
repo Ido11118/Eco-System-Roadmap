@@ -11,12 +11,13 @@ import {
 import { currentWeekIL, fmtDate, isISODate, todayIL, weekLabel, addDays, type ISODate } from "@/lib/weeks";
 import { Dialog, useConfirm } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
+import { msCanEdit, msScopeValue, parseMsScope } from "@/lib/milestone";
 import { WeekPicker } from "./WeekPicker";
 import { useCatalog } from "@/components/CatalogProvider";
 import type { PlanStore } from "./store";
 
 type NewItemPrefill = { teamId?: number | null; rowId?: number; startWeek?: ISODate; endWeek?: ISODate; name?: string; status?: string };
-type MsPrefill = { teamId?: number | null; date?: ISODate };
+type MsPrefill = { teamId?: number | null; domainId?: number | null; date?: ISODate };
 type SprintPrefill = { domainId?: number; startDate?: ISODate; endDate?: ISODate; name?: string };
 
 type UI = {
@@ -389,14 +390,21 @@ function NewItemDialog({ store, prefill, onClose, onCreated }: {
 // ---------------------------------------------------------------------------
 // אבני דרך
 // ---------------------------------------------------------------------------
-function ScopeSelect({ data, store, value, onChange, allowCross }: { data: PlanData; store: PlanStore; value: string; onChange: (v: string) => void; allowCross: boolean }) {
+/** שיוך אבן דרך: רוחבי (כל הארגון) / תחום שלם / צוות. ערכים לפי msScopeValue */
+function ScopeSelect({ data, store, value, onChange }: { data: PlanData; store: PlanStore; value: string; onChange: (v: string) => void }) {
   return (
-    <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
-      {allowCross && store.canEditCross() && <option value="cross">רוחבי (כל הארגון)</option>}
+    <select className="input" value={value} onChange={(e) => onChange(e.target.value)} data-testid="ms-scope">
+      {store.canEditCross() && <option value="cross">רוחבי (כל הארגון)</option>}
       {data.domains.map((d) => {
         const teams = data.teams.filter((t) => t.domainId === d.id && store.canEditTeam(t.id));
         if (!teams.length) return null;
-        return <optgroup key={d.id} label={d.name}>{teams.map((t) => <option key={t.id} value={String(t.id)}>{d.isSingleTeam ? d.name : `${d.name} / ${t.name}`}</option>)}</optgroup>;
+        return (
+          <optgroup key={d.id} label={d.name}>
+            {/* תחום עם צוות יחיד — הצוות הוא התחום, אין צורך באפשרות נפרדת */}
+            {!d.isSingleTeam && store.canEditDomain(d.id) && <option value={`d:${d.id}`}>{d.name} — כל התחום</option>}
+            {teams.map((t) => <option key={t.id} value={String(t.id)}>{d.isSingleTeam ? d.name : `${d.name} / ${t.name}`}</option>)}
+          </optgroup>
+        );
       })}
     </select>
   );
@@ -405,8 +413,9 @@ function ScopeSelect({ data, store, value, onChange, allowCross }: { data: PlanD
 function MilestoneDialog({ store, m, prefill, onClose }: { store: PlanStore; m: MilestoneDTO | null; prefill?: MsPrefill; onClose: () => void }) {
   const data = store.data!;
   const confirm = useConfirm();
-  const editable = m ? (m.teamId === null ? store.canEditCross() : store.canEditTeam(m.teamId)) : true;
-  const defaultScope = m ? (m.teamId === null ? "cross" : String(m.teamId))
+  const editable = m ? msCanEdit(m, store) : true;
+  const defaultScope = m ? msScopeValue(m)
+    : prefill?.domainId ? `d:${prefill.domainId}`
     : prefill?.teamId === null ? "cross" : prefill?.teamId ? String(prefill.teamId)
     : store.canEditCross() ? "cross" : String(data.teams.find((t) => store.canEditTeam(t.id))?.id ?? "");
   const [f, setF] = useState({ name: m?.name ?? "", date: m?.date ?? prefill?.date ?? todayIL(), scope: defaultScope, notes: m?.notes ?? "" });
@@ -414,7 +423,7 @@ function MilestoneDialog({ store, m, prefill, onClose }: { store: PlanStore; m: 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!f.name.trim() || !isISODate(f.date) || !f.scope) { toast.show("error", "יש למלא שם, תאריך ושיוך"); return; }
-    const v = { name: f.name.trim(), date: f.date, teamId: f.scope === "cross" ? null : Number(f.scope), notes: f.notes };
+    const v = { name: f.name.trim(), date: f.date, ...parseMsScope(f.scope), notes: f.notes };
     const ok = m ? await store.updateMilestone(m, v) : await store.createMilestone(v);
     if (ok) onClose(); // בכישלון החלון נשאר פתוח — הקלט לא אובד
   }
@@ -432,7 +441,7 @@ function MilestoneDialog({ store, m, prefill, onClose }: { store: PlanStore; m: 
           <div><label className="label">שם *</label><input className="input" data-autofocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="לדוגמה: הצגת תוכנית רבעונית" /></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="label">תאריך *</label><input type="date" className="input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
-            <div><label className="label">שיוך</label><ScopeSelect data={data} store={store} value={f.scope} onChange={(v) => setF({ ...f, scope: v })} allowCross /></div>
+            <div><label className="label">שיוך</label><ScopeSelect data={data} store={store} value={f.scope} onChange={(v) => setF({ ...f, scope: v })} /></div>
           </div>
           <div><label className="label">הערות</label><textarea className="input min-h-[60px]" value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></div>
         </fieldset>

@@ -28,7 +28,7 @@ export function rowToDTO(r: typeof workRows.$inferSelect): RowDTO {
 }
 export function msToDTO(m: typeof milestones.$inferSelect): MilestoneDTO {
   return {
-    id: m.id, name: m.name, date: m.date, teamId: m.teamId, notes: m.notes, version: m.version,
+    id: m.id, name: m.name, date: m.date, teamId: m.teamId, domainId: m.domainId, notes: m.notes, version: m.version,
     createdById: m.createdById, createdAt: iso(m.createdAt), updatedAt: iso(m.updatedAt), updatedById: m.updatedById,
   };
 }
@@ -367,25 +367,35 @@ export async function listDeletedItems(me: Me) {
 // אבני דרך וספרינטים
 // ---------------------------------------------------------------------------
 
-async function assertTeamOrCross(me: Me, teamId: number | null) {
-  if (teamId === null) assertCross(me);
-  else await assertTeam(me, teamId);
+/** הרשאת אבן דרך לפי השיוך: צוות → תחום הצוות; תחום → אותו תחום; רוחבי → הרשאה רוחבית */
+async function assertMsScope(me: Me, s: { teamId: number | null; domainId: number | null }) {
+  if (s.teamId !== null && s.domainId !== null) throw new ApiError(400, "אבן דרך משויכת לצוות או לתחום — לא לשניהם");
+  if (s.teamId !== null) await assertTeam(me, s.teamId);
+  else if (s.domainId !== null) await assertDomain(me, s.domainId);
+  else assertCross(me);
 }
 
-export async function createMilestone(me: Me, v: { name: string; date: string; teamId: number | null; notes?: string }) {
-  await assertTeamOrCross(me, v.teamId);
+export async function createMilestone(me: Me, v: { name: string; date: string; teamId: number | null; domainId?: number | null; notes?: string }) {
+  v = { ...v, domainId: v.teamId !== null ? null : v.domainId ?? null };
+  await assertMsScope(me, { teamId: v.teamId, domainId: v.domainId ?? null });
   const [m] = await db.insert(milestones).values({ ...v, notes: v.notes ?? "", createdById: me.id, updatedById: me.id }).returning();
   await audit(db, me.id, "milestone", m.id, "create", { name: m.name, date: m.date }, `נוצרה אבן דרך "${m.name}"`);
   return msToDTO(m);
 }
 
-export async function updateMilestone(me: Me, id: number, version: number, patch: Partial<{ name: string; date: string; teamId: number | null; notes: string }>) {
+export async function updateMilestone(me: Me, id: number, version: number, patch: Partial<{ name: string; date: string; teamId: number | null; domainId: number | null; notes: string }>) {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT id FROM milestones WHERE id = ${id} FOR UPDATE`);
     const [cur] = await tx.select().from(milestones).where(and(eq(milestones.id, id), isNull(milestones.deletedAt)));
     if (!cur) throw new ApiError(404, "אבן הדרך לא נמצאה");
-    await assertTeamOrCross(me, cur.teamId);
-    if (patch.teamId !== undefined) await assertTeamOrCross(me, patch.teamId);
+    await assertMsScope(me, cur);
+    // שינוי שיוך: השיוך החדש נבדק כמכלול (צוות שנבחר מאפס את התחום, ולהפך)
+    if (patch.teamId !== undefined || patch.domainId !== undefined) {
+      const teamId = patch.teamId !== undefined ? patch.teamId : patch.domainId != null ? null : cur.teamId;
+      const domainId = teamId !== null ? null : patch.domainId !== undefined ? patch.domainId : cur.domainId;
+      patch = { ...patch, teamId, domainId };
+      await assertMsScope(me, { teamId, domainId });
+    }
     if (cur.version !== version) throw new ApiError(409, "אבן הדרך עודכנה בינתיים על ידי משתמש אחר.", { conflict: "version" });
     const d = diff(cur as unknown as Record<string, unknown>, patch as Record<string, unknown>);
     if (!Object.keys(d).length) return msToDTO(cur);
@@ -402,7 +412,7 @@ export async function deleteMilestone(me: Me, id: number, restore = false) {
     await tx.execute(sql`SELECT id FROM milestones WHERE id = ${id} FOR UPDATE`);
     const [cur] = await tx.select().from(milestones).where(eq(milestones.id, id));
     if (!cur || (restore ? !cur.deletedAt : !!cur.deletedAt)) throw new ApiError(404, restore ? "אין מה לשחזר" : "אבן הדרך לא נמצאה");
-    await assertTeamOrCross(me, cur.teamId);
+    await assertMsScope(me, cur);
     await tx.update(milestones).set({ deletedAt: restore ? null : new Date(), version: cur.version + 1 }).where(eq(milestones.id, id));
     await audit(tx, me.id, "milestone", id, restore ? "restore" : "delete", null, `${restore ? "שוחזרה" : "נמחקה"} אבן דרך "${cur.name}"`);
     return { ok: true };

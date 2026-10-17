@@ -184,7 +184,11 @@ function validateRevisionData(data: PlanData, history: PlanData[]) {
   for (const r of data.rows) {
     if (r.kind === "TEAM" ? !(r.teamId !== null && teamIds.has(r.teamId)) : r.teamId !== null) throw new ApiError(400, "שורה עם שיוך צוות לא תקין");
   }
-  for (const m of data.milestones) if (m.teamId !== null && !teamIds.has(m.teamId)) throw new ApiError(400, `אבן הדרך "${m.name}" משויכת לצוות לא קיים`);
+  for (const m of data.milestones) {
+    if (m.teamId !== null && !teamIds.has(m.teamId)) throw new ApiError(400, `אבן הדרך "${m.name}" משויכת לצוות לא קיים`);
+    if (m.domainId !== null && !domainIds.has(m.domainId)) throw new ApiError(400, `אבן הדרך "${m.name}" משויכת לתחום לא קיים`);
+    if (m.teamId !== null && m.domainId !== null) throw new ApiError(400, `אבן הדרך "${m.name}" משויכת גם לצוות וגם לתחום`);
+  }
   for (const sp of data.sprints) {
     if (!domainIds.has(sp.domainId)) throw new ApiError(400, `הספרינט "${sp.name}" משויך לתחום לא קיים`);
     if (sp.endDate < sp.startDate) throw new ApiError(400, `תאריכי הספרינט "${sp.name}" אינם תקינים`);
@@ -210,6 +214,10 @@ function validateRevisionData(data: PlanData, history: PlanData[]) {
  * ממירים בקריאה לתחום של אותו צוות (לפי מבנה הארגון השמור באותו Snapshot) — התוכן השמור עצמו לא משתנה.
  */
 export function normalizePlanData(data: PlanData): PlanData {
+  // אבני דרך מלפני שנוספה האפשרות "לכל התחום" — ללא domainId (כלומר צוות או רוחבי)
+  if (data.milestones?.some((m) => (m as { domainId?: number | null }).domainId === undefined)) {
+    data = { ...data, milestones: data.milestones.map((m) => ({ ...m, domainId: m.domainId ?? null })) };
+  }
   if (!data.sprints?.some((s) => (s as { domainId?: number }).domainId === undefined)) return data;
   const teamDomain = new Map(data.teams.map((t) => [t.id, t.domainId]));
   return {

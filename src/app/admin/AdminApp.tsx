@@ -286,7 +286,7 @@ function UserCard({ u, domains }: { u: AdminUser; domains: { id: number; name: s
 
 function AuditLog() {
   const q = useQuery({ queryKey: ["audit"], queryFn: () => api<{ id: number; at: string; entityType: string; entityId: string; action: string; summary: string; userName: string | null }[]>("GET", "/api/admin/audit?limit=500") });
-  const ET: Record<string, string> = { item: "תכולה", row: "שורה", milestone: "אבן דרך", sprint: "ספרינט", snapshot: "Snapshot", user: "משתמש", catalog: "הגדרות" };
+  const ET: Record<string, string> = { item: "תכולה", row: "שורה", milestone: "אבן דרך", sprint: "ספרינט", snapshot: "Snapshot", user: "משתמש", catalog: "הגדרות", import: "ייבוא AI" };
   return (
     <div className="card overflow-hidden">
       <table className="w-full text-[12.5px]">

@@ -14,13 +14,14 @@ import { currentPrefs, savePrefs, useTextSize, zoomOf } from "@/components/plan/
 
 export type NavKey = "gantt" | "table" | "compare" | "snapshots" | "admin";
 
-export function AppShell({ me, active, children }: { me: Me; active: NavKey; children: React.ReactNode }) {
+/** sidebarAction: כפתור פעולה בתחתית סרגל הצד (למשל "הוספה בעזרת AI" בדף התוכנית) */
+export function AppShell({ me, active, children, sidebarAction }: { me: Me; active: NavKey; children: React.ReactNode; sidebarAction?: React.ReactNode }) {
   // גודל תצוגה אישי: מגדיל/מקטין את כל הממשק (טקסט, שורות, כפתורים). height מתוקן כדי למלא בדיוק את המסך.
   const [size] = useTextSize(me.preferences);
   const z = zoomOf(size);
   return (
     <div className="flex w-full overflow-hidden" style={{ zoom: z, height: `calc(100vh / ${z})` }}>
-      <Sidebar me={me} active={active} />
+      <Sidebar me={me} active={active} action={sidebarAction} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
     </div>
   );
@@ -36,7 +37,7 @@ export function usePendingCount(enabled: boolean) {
   });
 }
 
-function Sidebar({ me, active }: { me: Me; active: NavKey }) {
+function Sidebar({ me, active, action }: { me: Me; active: NavKey; action?: React.ReactNode }) {
   const isSuper = me.role === "SUPER";
   const [collapsed, setCollapsed] = useState(() => !!currentPrefs(me.preferences).sidebarCollapsed);
   const pending = usePendingCount(isSuper).data?.count ?? 0;
@@ -77,6 +78,8 @@ function Sidebar({ me, active }: { me: Me; active: NavKey }) {
           );
         })}
       </nav>
+      {/* כפתור פעולה: צמוד לימין באותו מיקום בדיוק בסרגל פתוח ומכווץ (נכנס ב-56px בלי לחרוג מהשוליים) */}
+      {action && <div className="flex justify-start px-2 pb-1" data-testid="sidebar-action">{action}</div>}
       <button onClick={toggle} className="m-2 flex h-8 items-center gap-2 rounded-md px-2.5 text-[12px] text-ink-500 hover:bg-ink-100 hover:text-ink-900"
         title={collapsed ? "הרחבת סרגל הצד" : "כיווץ סרגל הצד"} aria-label={collapsed ? "הרחבת סרגל הצד" : "כיווץ סרגל הצד"}>
         {collapsed ? <PanelRightOpen size={16} /> : <><PanelRightClose size={16} /><span>כיווץ</span></>}

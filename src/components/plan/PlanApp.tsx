@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { GitCompareArrows, GanttChart, Pencil, Plus, Camera, Eye, AlertCircle, Loader2, Lock, RectangleHorizontal, Diamond, Flag, Users, User as UserIcon } from "lucide-react";
+import { AiImportButton } from "./AiImport";
 import type { Me, PlanData, SnapshotMeta, ViewConfig } from "@/lib/types";
 import { useCatalog } from "@/components/CatalogProvider";
 import { fmtDate, todayIL, isISODate } from "@/lib/weeks";
@@ -151,7 +152,7 @@ export function PlanApp({ me }: { me: Me }) {
     },
     createMilestone: async (v) => {
       const ok = await live.createMilestone(v);
-      if (ok) reveal({ kind: "milestone", teamId: v.teamId, date: v.date });
+      if (ok) reveal({ kind: "milestone", teamId: v.teamId, domainId: v.domainId, date: v.date });
       return ok;
     },
     createSprint: async (v) => {
@@ -182,7 +183,7 @@ export function PlanApp({ me }: { me: Me }) {
 
   return (
     <WorkspaceUIProvider store={workStore} me={me}>
-      <AppShell me={me} active={mode}>
+      <AppShell me={me} active={mode} sidebarAction={mode !== "compare" && !snapId ? <AiImportButton store={workStore} /> : undefined}>
         <TopBar me={me}>
           {mode !== "compare" && (
             <SourceSelect snapshots={snapshots.data ?? []} value={snapId} onChange={(id) => setParams({ snap: id ? String(id) : null, rev: null })} />

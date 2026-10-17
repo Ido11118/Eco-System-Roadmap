@@ -276,7 +276,6 @@ function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v
                 options={[{ key: "compact", label: "צפופה" }, { key: "normal", label: "רגילה" }, { key: "wide", label: "מרווחת" }]} />
             </div>
           )}
-          <p className="text-[11px] text-ink-400">ההגדרות נשמרות באופן אישי ואינן משפיעות על משתמשים אחרים. הצגת אבני דרך וספרינטים — בכפתורי &quot;הצג&quot; בשורת הסינון.</p>
         </div>
       </Floating>
     </>

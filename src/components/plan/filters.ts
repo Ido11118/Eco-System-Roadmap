@@ -157,7 +157,7 @@ export function permissionDefaultDomains(me: { role: string; domainIds: number[]
 
 export type Revealable =
   | { kind: "item"; teamId: number | null; rowKind?: "TEAM" | "INFLUENCE" | "CROSS_EVENT"; status: string; priority: string; name: string; notes?: string; startWeek: ISODate; endWeek: ISODate }
-  | { kind: "milestone"; teamId: number | null; date: ISODate }
+  | { kind: "milestone"; teamId: number | null; domainId?: number | null; date: ISODate }
   | { kind: "sprint"; domainId: number; startDate: ISODate; endDate: ISODate };
 
 /**
@@ -168,14 +168,16 @@ export function revealFor(v: ViewConfig, data: PlanData, x: Revealable): { view:
   let n = { ...v };
   const changes: string[] = [];
   const team = "teamId" in x && x.teamId !== null ? data.teams.find((t) => t.id === x.teamId) : undefined;
-  const domainId = x.kind === "sprint" ? x.domainId : team?.domainId;
+  const domainId = x.kind === "sprint" ? x.domainId : x.kind === "milestone" && x.domainId != null ? x.domainId : team?.domainId;
   if (domainId !== undefined && n.domainIds.length && !n.domainIds.includes(domainId)) { n.domainIds = [...n.domainIds, domainId]; changes.push("תחום"); }
   // תכולה רוחבית / אבן דרך רוחבית — השורה הרוחבית צריכה להיות מוצגת
-  const crossKind = x.kind === "item" && x.rowKind && x.rowKind !== "TEAM" ? x.rowKind : x.kind === "milestone" && x.teamId === null ? "CROSS_EVENT" : null;
+  const crossKind = x.kind === "item" && x.rowKind && x.rowKind !== "TEAM" ? x.rowKind : x.kind === "milestone" && x.teamId === null && x.domainId == null ? "CROSS_EVENT" : null;
   if (crossKind && n.domainIds.length && !n.domainIds.includes(CROSS_FILTER[crossKind])) { n.domainIds = [...n.domainIds, CROSS_FILTER[crossKind]]; changes.push("שורה רוחבית"); }
   if (team && n.teamIds.length && !n.teamIds.includes(team.id)) { n.teamIds = [...n.teamIds, team.id]; changes.push("צוות"); }
-  if (x.kind === "sprint" && n.teamIds.length && !data.teams.some((t) => t.domainId === x.domainId && n.teamIds.includes(t.id))) {
-    n.teamIds = [...n.teamIds, ...data.teams.filter((t) => t.domainId === x.domainId).map((t) => t.id)]; changes.push("צוות");
+  // ספרינט / אבן דרך של תחום שלם: לפחות צוות אחד מהתחום צריך להיות מוצג
+  const wholeDomain = x.kind === "sprint" ? x.domainId : x.kind === "milestone" && x.domainId != null ? x.domainId : null;
+  if (wholeDomain !== null && n.teamIds.length && !data.teams.some((t) => t.domainId === wholeDomain && n.teamIds.includes(t.id))) {
+    n.teamIds = [...n.teamIds, ...data.teams.filter((t) => t.domainId === wholeDomain).map((t) => t.id)]; changes.push("צוות");
   }
   if (x.kind === "item") {
     if (n.showItems === false) { n.showItems = true; changes.push("תכולות"); }

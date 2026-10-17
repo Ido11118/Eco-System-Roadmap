@@ -1238,6 +1238,92 @@ async function main() {
     await pa.keyboard.press("Escape");
   });
 
+  await scenario(51, "ייבוא בעזרת AI: הרשאות נאכפות, שיבוץ בשורות לפי חפיפה, ביטול; בממשק — פריט ללא הרשאה מסומן ולא מיובא", async () => {
+    const w = (n: number) => addWeeks(cw, 90 + n);
+    // API: פריט בתחום ללא הרשאה → כל הייבוא נדחה, שום דבר לא נוצר
+    const denied = await json<{ error: string }>(A, "POST", "/api/import", { items: [
+      { name: `AI-ok-${RUN}`, teamId: T_AZ1, cross: null, startWeek: w(0), endWeek: w(0), notes: "" },
+      { name: `AI-esh-${RUN}`, teamId: T_ESH, cross: null, startWeek: w(0), endWeek: w(0), notes: "" },
+    ], milestones: [], sprints: [] });
+    assert(denied.status === 403 && denied.body.error.includes("אש"), `import with forbidden team: ${denied.status} ${JSON.stringify(denied.body)}`);
+    assert(!(await json<PlanData>(A, "GET", "/api/plan")).body.items.some((i) => i.name === `AI-ok-${RUN}`), "partial import happened");
+    // שלוש תכולות חופפות באותו צוות → שלוש שורות שונות (כולל שורה חדשה אם צריך), ואבן דרך + ספרינט
+    const rows0 = (await json<PlanData>(A, "GET", "/api/plan")).body.rows.filter((r) => r.teamId === T_AZ1).length;
+    const res = await json<{ itemIds: number[]; milestoneIds: number[]; sprintIds: number[]; rowIds: number[] }>(A, "POST", "/api/import", {
+      items: [0, 1, 2].map((k) => ({ name: `AI-${k}-${RUN}`, teamId: T_AZ1, cross: null, startWeek: w(0), endWeek: w(1), status: "IN_PROGRESS", notes: "" })),
+      milestones: [{ name: `AI-ms-${RUN}`, date: w(1), teamId: T_AZ1, notes: "" }],
+      sprints: [{ name: `AI-sp-${RUN}`, startDate: w(0), endDate: w(2), domainId: AGAM, notes: "" }],
+    });
+    assert(res.status === 200 && res.body.itemIds.length === 3 && res.body.milestoneIds.length === 1 && res.body.sprintIds.length === 1, `import: ${res.status} ${JSON.stringify(res.body)}`);
+    const plan1 = (await json<PlanData>(A, "GET", "/api/plan")).body;
+    const created = plan1.items.filter((i) => res.body.itemIds.includes(i.id));
+    assert(new Set(created.map((i) => i.rowId)).size === 3, "overlapping imported items share a row");
+    assert(created.every((i) => i.status === "IN_PROGRESS"), "status not applied");
+    assert(plan1.rows.filter((r) => r.teamId === T_AZ1).length === rows0 + res.body.rowIds.length, "new rows not reported");
+    // ביטול: הכל מוסר, כולל השורות החדשות שהתרוקנו
+    const u = await json<{ removed: number; skipped: number }>(A, "POST", "/api/import/undo", res.body);
+    assert(u.status === 200 && u.body.removed === 5 && u.body.skipped === 0, `undo: ${JSON.stringify(u.body)}`);
+    const plan2 = (await json<PlanData>(A, "GET", "/api/plan")).body;
+    assert(!plan2.items.some((i) => res.body.itemIds.includes(i.id)) && !plan2.milestones.some((m) => res.body.milestoneIds.includes(m.id)), "undo left items");
+    assert(plan2.rows.filter((r) => r.teamId === T_AZ1).length === rows0, "undo left new rows");
+
+    // ממשק: הדבקה עם פריט מורשה ופריט ללא הרשאה
+    await pa.goto(`${BASE}/plan?view=gantt`); await pa.waitForSelector("[data-testid=gantt-view]");
+    await pa.click("[data-testid=ai-import-open]");
+    await pa.waitForSelector("[data-testid=ai-import]");
+    await pa.click("[data-testid=ai-copy-prompt]").catch(() => {}); // ייתכן שהלוח חסום בדפדפן הבדיקה — לא מהותי
+    const json1 = { format: "workplan-import/v1", items: [
+      { name: `AI-ui-${RUN}`, team: "עזרים 1", start: w(3), end: w(4) },
+      { name: `AI-ui-esh-${RUN}`, team: "attack-exposure", start: w(3), end: w(3) },
+    ] };
+    await pa.fill("[data-testid=ai-json]", "```json\n" + JSON.stringify(json1, null, 2) + "\n```");
+    await pa.click("[data-testid=ai-parse]");
+    await pa.waitForSelector("[data-testid=ai-summary]");
+    assert((await pa.locator("[data-testid=ai-row-item][data-invalid]").count()) === 1, "forbidden row not flagged");
+    assert((await pa.locator("[data-testid=ai-row-error]").first().innerText()).includes("אין לך הרשאת עריכה לתחום"), "no permission reason shown");
+    assert((await pa.innerText("[data-testid=ai-import-submit]")).includes("(1)"), "submit count should be 1");
+    await pa.click("[data-testid=ai-import-submit]");
+    await pa.waitForSelector("[data-testid=ai-import]", { state: "detached" });
+    const plan3 = (await json<PlanData>(A, "GET", "/api/plan")).body;
+    const ui = plan3.items.find((i) => i.name === `AI-ui-${RUN}`);
+    assert(ui && ui.teamId === T_AZ1 && ui.startWeek === w(3) && ui.endWeek === w(4), "UI import not created correctly");
+    assert(!plan3.items.some((i) => i.name === `AI-ui-esh-${RUN}`), "forbidden item imported");
+    await pa.waitForSelector(`[data-bar="${ui.id}"]`, { state: "attached" });
+  });
+
+  await scenario(52, "אבן דרך לתחום שלם: הרשאה לפי תחום, לא גם צוות וגם תחום, מוצגת בגאנט ובחלון; גם בייבוא AI", async () => {
+    const d = addWeeks(cw, 3);
+    const ok = await json<{ id: number; teamId: number | null; domainId: number | null; version: number }>(A, "POST", "/api/milestones", { name: `MS-dom-${RUN}`, date: d, teamId: null, domainId: AGAM });
+    assert(ok.status === 200 && ok.body.domainId === AGAM && ok.body.teamId === null, `domain milestone: ${ok.status} ${JSON.stringify(ok.body)}`);
+    assert((await json(A, "POST", "/api/milestones", { name: "x", date: d, teamId: null, domainId: ESH })).status === 403, "domain milestone without permission allowed");
+    assert((await json(A, "POST", "/api/milestones", { name: "x", date: d, teamId: T_AZ1, domainId: AGAM })).status === 400, "team+domain accepted");
+    // העברה לרוחבי — ל-A אין הרשאה רוחבית
+    assert((await json(A, "PATCH", `/api/milestones/${ok.body.id}`, { version: ok.body.version, patch: { teamId: null, domainId: null } })).status === 403, "moved to cross without permission");
+    // העברה לצוות באותו תחום — מותר, והתחום מתאפס
+    const mv = await json<{ teamId: number | null; domainId: number | null; version: number }>(A, "PATCH", `/api/milestones/${ok.body.id}`, { version: ok.body.version, patch: { teamId: T_AZ1, domainId: null } });
+    assert(mv.status === 200 && mv.body.teamId === T_AZ1 && mv.body.domainId === null, `move to team: ${JSON.stringify(mv.body)}`);
+    const back = await json<{ version: number }>(A, "PATCH", `/api/milestones/${ok.body.id}`, { version: mv.body.version, patch: { teamId: null, domainId: AGAM } });
+    assert(back.status === 200, "move back to domain");
+    // ייבוא AI: אבן דרך לתחום
+    const imp = await json<{ milestoneIds: number[] }>(A, "POST", "/api/import", { items: [], milestones: [{ name: `MS-ai-dom-${RUN}`, date: addWeeks(d, 2), teamId: null, domainId: AGAM, notes: "" }], sprints: [] });
+    assert(imp.status === 200, `import domain milestone: ${imp.status}`);
+    const deniedImp = await json(A, "POST", "/api/import", { items: [], milestones: [{ name: "x", date: d, teamId: null, domainId: ESH, notes: "" }], sprints: [] });
+    assert(deniedImp.status === 403, "import domain milestone without permission");
+    const plan = (await json<PlanData>(A, "GET", "/api/plan")).body;
+    assert(plan.milestones.find((m) => m.id === imp.body.milestoneIds[0])?.domainId === AGAM, "imported milestone lost domain");
+    // ממשק: מעוין "תחום" בגאנט; תקציר מציג "(כל התחום)"; בחלון — השיוך "כל התחום" נבחר
+    await pa.goto(`${BASE}/plan?view=gantt`); await pa.waitForSelector("[data-testid=gantt-view]");
+    const marker = pa.locator(`[data-marker=milestone][data-ms-scope=domain][aria-label="אבן דרך: MS-dom-${RUN}"]`);
+    await marker.waitFor({ state: "attached" });
+    assert((await marker.count()) === 1, "domain milestone marker should appear once");
+    await marker.scrollIntoViewIfNeeded(); await marker.click();
+    await pa.waitForSelector("[data-testid=marker-summary]");
+    assert((await pa.innerText("[data-testid=marker-summary]")).includes("(כל התחום)"), "summary does not show domain scope");
+    await pa.click("[data-testid=marker-edit]");
+    assert((await pa.inputValue("[data-testid=ms-scope]")) === `d:${AGAM}`, "dialog scope is not the domain");
+    await pa.keyboard.press("Escape");
+  });
+
   await browser.close();
   console.log("\n────────────────────────────────────────");
   const failed = results.filter((r) => !r.ok);

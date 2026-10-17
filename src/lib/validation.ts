@@ -49,10 +49,12 @@ export const createRowSchema = z.object({
   teamId: id, anchorRowId: id.optional(), position: z.enum(["above", "below"]).default("below"),
 });
 
-export const milestoneSchema = z.object({ name, date: isoDate, teamId: id.nullable(), notes: notes.optional() });
+// שיוך: teamId (צוות) או domainId (תחום שלם); שניהם null = רוחבי
+export const milestoneSchema = z.object({ name, date: isoDate, teamId: id.nullable(), domainId: id.nullable().optional(), notes: notes.optional() })
+  .refine((v) => v.teamId === null || v.domainId == null, { message: "אבן דרך משויכת לצוות או לתחום — לא לשניהם" });
 export const milestonePatchSchema = z.object({
   version: z.number().int(),
-  patch: z.object({ name: name.optional(), date: isoDate.optional(), teamId: id.nullable().optional(), notes: notes.optional() }).strict(),
+  patch: z.object({ name: name.optional(), date: isoDate.optional(), teamId: id.nullable().optional(), domainId: id.nullable().optional(), notes: notes.optional() }).strict(),
 });
 
 export const sprintSchema = z.object({ name, startDate: isoDate, endDate: isoDate, domainId: id, notes: notes.optional() })
@@ -125,7 +127,7 @@ export const planDataSchema = z.object({
   rows: z.array(z.object({ id: z.number().int(), kind: z.enum(["TEAM", "INFLUENCE", "CROSS_EVENT"]), teamId: z.number().int().nullable(), sortOrder: z.number(), version: z.number().int() })),
   items: z.array(itemDTO),
   milestones: z.array(z.object({
-    id: z.number().int(), name, date: isoDate, teamId: z.number().int().nullable(), notes: z.string(), version: z.number().int(),
+    id: z.number().int(), name, date: isoDate, teamId: z.number().int().nullable(), domainId: z.number().int().nullable().default(null), notes: z.string(), version: z.number().int(),
     createdById: z.number().int().nullable(), createdAt: z.string(), updatedAt: z.string(), updatedById: z.number().int().nullable(),
   })),
   sprints: z.array(z.object({
@@ -181,3 +183,21 @@ export const handleRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("link") }),
   z.object({ action: z.literal("dismiss") }),
 ]);
+
+// ייבוא בעזרת AI (נשלח מהתצוגה המקדימה אחרי נרמול). השרת בודק שוב הרשאות, קטלוג וחפיפות.
+const importItem = z.object({
+  name, teamId: id.nullable(), cross: z.enum(["INFLUENCE", "CROSS_EVENT"]).nullable(), startWeek: sunday, endWeek: sunday,
+  status: status.optional(), priority: priority.optional(), notes,
+}).refine((v) => v.endWeek >= v.startWeek, { message: "שבוע הסיום אינו יכול להיות לפני שבוע ההתחלה" })
+  .refine((v) => (v.teamId === null) !== (v.cross === null), { message: "תכולה חייבת להיות משויכת לצוות או לשורה רוחבית" });
+const importMilestone = z.object({ name, date: isoDate, teamId: id.nullable(), domainId: id.nullable().default(null), notes })
+  .refine((v) => v.teamId === null || v.domainId === null, { message: "אבן דרך משויכת לצוות או לתחום — לא לשניהם" });
+const importSprint = z.object({ name, startDate: isoDate, endDate: isoDate, domainId: id, notes })
+  .refine((v) => v.endDate >= v.startDate, { message: "תאריך הסיום אינו יכול להיות לפני תאריך ההתחלה" });
+export const importSchema = z.object({
+  items: z.array(importItem).max(300), milestones: z.array(importMilestone).max(300), sprints: z.array(importSprint).max(300),
+}).refine((v) => v.items.length + v.milestones.length + v.sprints.length > 0, "אין מה לייבא")
+  .refine((v) => v.items.length + v.milestones.length + v.sprints.length <= 300, "ניתן לייבא עד 300 פריטים בפעם אחת");
+export const importUndoSchema = z.object({
+  itemIds: z.array(id).max(300), milestoneIds: z.array(id).max(300), sprintIds: z.array(id).max(300), rowIds: z.array(id).max(300),
+});

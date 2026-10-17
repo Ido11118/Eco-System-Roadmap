@@ -12,6 +12,7 @@ import {
   buildTimeline, dayOfWeek, fmtDate, addDays, weekEndOf, weekRangeLabel, weekNumber, weekStartOf, daysDiff,
   type ISODate, type Timeline,
 } from "@/lib/weeks";
+import { msCanEdit, msScopeLabel } from "@/lib/milestone";
 import { layoutLanes } from "@/lib/compare";
 import { useTooltip } from "@/components/ui/tooltip";
 import { Floating, MenuItem } from "@/components/ui/popover";
@@ -411,7 +412,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     }
     // אבני דרך רוחביות בשורת "מופעים רוחביים"
     if (teamId === null && view.showMilestones && row?.kind === "CROSS_EVENT" && lane.isRowStart && lane.rowIndex === 0) {
-      for (const m of data.milestones.filter((x) => x.teamId === null)) out.push(renderMilestone(m, lane.height));
+      for (const m of data.milestones.filter((x) => x.teamId === null && x.domainId === null)) out.push(renderMilestone(m, lane.height));
     }
     return out;
   };
@@ -427,21 +428,30 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => openMarker({ x: e.clientX, y: e.clientY, milestone: m })}
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); openMenu({ x: e.clientX, y: e.clientY, teamId: m.teamId, milestone: m }); }}
-        onMouseMove={(e) => tip.show(<div><div className="font-semibold">◆ {m.name}</div><div className="opacity-80">{fmtDate(m.date)}{m.teamId === null ? " · רוחבי" : ""}</div>{m.notes && <div className="opacity-70">{m.notes}</div>}</div>, e, { delay: 600, anchor: e.currentTarget })}
-        onMouseLeave={tip.hide} aria-label={`אבן דרך: ${m.name}`}>
-        <span className="block h-3 w-3 rotate-45 rounded-[2px] border-2 border-white bg-violet-600 shadow" />
+        onMouseMove={(e) => tip.show(<div><div className="font-semibold">◆ {m.name}</div><div className="opacity-80">{fmtDate(m.date)} · {msScopeLabel(m, data)}</div>{m.notes && <div className="opacity-70">{m.notes}</div>}</div>, e, { delay: 600, anchor: e.currentTarget })}
+        onMouseLeave={tip.hide} aria-label={`אבן דרך: ${m.name}`} data-ms-scope={m.teamId !== null ? "team" : m.domainId !== null ? "domain" : "cross"}>
+        {/* השם — קטן ועדין מעל המעוין, כדי שאפשר לזהות את אבן הדרך בלי לרחף */}
+        <span className="pointer-events-none absolute bottom-full left-1/2 mb-[3px] max-w-[140px] -translate-x-1/2 truncate whitespace-nowrap rounded-sm bg-white/75 px-[3px] text-[10px] font-medium leading-[13px] text-violet-700/90" data-ms-label>{m.name}</span>
+        {/* אבן דרך של תחום שלם: מעוין עם מסגרת סגולה ומרכז לבן — להבדיל מאבן דרך של צוות */}
+        <span className={clsx("block h-3 w-3 rotate-45 rounded-[2px] border-2 shadow", m.domainId !== null ? "border-violet-600 bg-white" : "border-white bg-violet-600")} />
       </button>
     );
   };
 
-  const msByTeam = useMemo(() => {
-    const m = new Map<number, MilestoneDTO[]>();
-    for (const x of data.milestones) if (x.teamId !== null) {
-      if (!m.has(x.teamId)) m.set(x.teamId, []);
-      m.get(x.teamId)!.push(x);
+  // אבני דרך לפי צוות. אבן דרך של תחום: הקו עובר בכל צוותי התחום, והמעוין מוצג פעם אחת — בצוות הראשון המוצג בתחום
+  const { msByTeam, msMarkersByTeam } = useMemo(() => {
+    const lines = new Map<number, MilestoneDTO[]>(), markers = new Map<number, MilestoneDTO[]>();
+    const add = (map: Map<number, MilestoneDTO[]>, teamId: number, x: MilestoneDTO) => { if (!map.has(teamId)) map.set(teamId, []); map.get(teamId)!.push(x); };
+    for (const x of data.milestones) {
+      if (x.teamId !== null) { add(lines, x.teamId, x); add(markers, x.teamId, x); }
+      else if (x.domainId !== null) {
+        const ts = teams.filter((t) => t.domainId === x.domainId);
+        ts.forEach((t) => add(lines, t.id, x));
+        if (ts[0]) add(markers, ts[0].id, x);
+      }
     }
-    return m;
-  }, [data.milestones]);
+    return { msByTeam: lines, msMarkersByTeam: markers };
+  }, [data.milestones, teams]);
 
   const renderTeamOverlay = view.showMilestones ? (teamId: number, height: number) => (
     <>
@@ -454,12 +464,12 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   ) : undefined;
   // סמני אבני הדרך עצמם — בשכבה מעל הקוביות, כדי שקובייה באותו שבוע לא תסתיר אותם
   const renderTeamMarkers = view.showMilestones ? (teamId: number) => (
-    <>{(msByTeam.get(teamId) ?? []).map((m) => renderMilestone(m, 10))}</>
+    <>{(msMarkersByTeam.get(teamId) ?? []).map((m) => renderMilestone(m, 10))}</>
   ) : undefined;
 
   const renderBodyOverlay = view.showMilestones ? () => (
     <>
-      {data.milestones.filter((m) => m.teamId === null).map((m) => {
+      {data.milestones.filter((m) => m.teamId === null && m.domainId === null).map((m) => {
         const wi = idxOf(weekStartOf(m.date));
         if (wi < 0 || wi >= n) return null;
         return <div key={m.id} className="absolute inset-y-0 w-0 border-r border-dotted border-violet-300" style={{ right: dateX(m.date) }} />;
@@ -601,7 +611,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
               <LabelMenu label={menu.label} data={data} view={view} setView={setView} toast={toast} />
             ) : menu.milestone ? (() => {
               const m = menu.milestone;
-              const ed = m.teamId === null ? store.canEditCross() : store.canEditTeam(m.teamId);
+              const ed = msCanEdit(m, store);
               return (
                 <>
                   <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-violet-700">◆ {m.name} · {fmtDate(m.date)}</div>
@@ -709,10 +719,8 @@ function MarkerSummary({ marker, data, store, confirm, onClose, onEdit, onNext }
   confirm: ReturnType<typeof useConfirm>; onClose: () => void; onEdit: () => void; onNext: (pre: ReturnType<typeof nextSprintPrefill>) => void;
 }) {
   const { milestone: m, sprint: sp } = marker;
-  const editable = m ? (m.teamId === null ? store.canEditCross() : store.canEditTeam(m.teamId)) : sp ? store.canEditDomain(sp.domainId) : false;
-  const team = m?.teamId != null ? data.teams.find((t) => t.id === m.teamId) : undefined;
-  const scope = m ? (m.teamId === null ? "רוחבי — כל הארגון" : `${data.domains.find((d) => d.id === team?.domainId)?.name ?? ""}${team && team.name !== data.domains.find((d) => d.id === team.domainId)?.name ? ` / ${team.name}` : ""}`)
-    : `${data.domains.find((d) => d.id === sp!.domainId)?.name ?? ""} (כל הצוותים בתחום)`;
+  const editable = m ? msCanEdit(m, store) : sp ? store.canEditDomain(sp.domainId) : false;
+  const scope = m ? msScopeLabel(m, data) : `${data.domains.find((d) => d.id === sp!.domainId)?.name ?? ""} (כל הצוותים בתחום)`;
   return (
     <Floating open point={marker} onClose={onClose}>
       <div className="relative w-[290px] p-3 text-[12.5px]" data-testid="marker-summary">

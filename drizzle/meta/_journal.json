@@ -57,6 +57,13 @@
       "when": 1792179031800,
       "tag": "0007_user_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792260041917,
+      "tag": "0008_milestones_domain",
+      "breakpoints": true
     }
   ]
 }

@@ -11,7 +11,7 @@ import { useToast } from "@/components/ui/toast";
 
 export type ItemPatch = Partial<Pick<ItemDTO, "name" | "status" | "priority" | "notes" | "startWeek" | "endWeek" | "rowId">>;
 export type NewItem = { rowId: number; name: string; startWeek: string; endWeek: string; status?: string; priority?: string; notes?: string };
-export type MsInput = { name: string; date: string; teamId: number | null; notes?: string };
+export type MsInput = { name: string; date: string; teamId: number | null; domainId: number | null; notes?: string };
 export type SprintInput = { name: string; startDate: string; endDate: string; domainId: number; notes?: string };
 
 export interface PlanStore {
