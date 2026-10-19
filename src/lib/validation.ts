@@ -234,3 +234,4 @@ export const importUndoSchema = z.object({
 const teamName = z.string().trim().min(1, "יש להזין שם צוות").max(60, "שם הצוות ארוך מדי");
 export const teamCreateSchema = z.object({ domainId: id, name: teamName });
 export const teamRenameSchema = z.object({ name: teamName });
+export const teamOrderSchema = z.object({ domainId: id, teamIds: z.array(id).min(1).max(100) });

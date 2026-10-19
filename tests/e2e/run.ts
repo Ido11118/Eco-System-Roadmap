@@ -1599,6 +1599,41 @@ async function main() {
     assert(!(await json<BL[]>(A, "GET", "/api/backlog")).body.some((b) => b.id === secret.id), "placed item still in backlog");
   });
 
+  // 58 --------------------------------------------------------------
+  await scenario(58, "מבנה הגאנט: שינוי סדר הצוותים בגרירה ובמקלדת — נשמר ומשפיע על הגאנט; רק למנהל המערכת", async () => {
+    const agamTeams = async () => (await json<PlanData>(admin, "GET", "/api/plan")).body.teams.filter((t) => t.domainId === AGAM).sort((a, b) => a.sortOrder - b.sortOrder).map((t) => t.id);
+    const orig = await agamTeams();
+    assert(orig.length >= 3, `need 3+ teams in אג"ם, got ${orig.length}`);
+    assert((await json(A, "POST", "/api/admin/teams/order", { domainId: AGAM, teamIds: [...orig].reverse() })).status === 403, "regular user can reorder teams");
+    assert((await json(admin, "POST", "/api/admin/teams/order", { domainId: AGAM, teamIds: orig.slice(1) })).status === 409, "partial team list accepted");
+    await pAdmin.goto(`${BASE}/admin`);
+    await pAdmin.click("[data-testid=admin-tab-structure]");
+    const rowsOf = async () => (await pAdmin.locator(`[data-testid=structure-teams-${AGAM}] [data-team-row]`).evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-team-row")))));
+    await pAdmin.waitForSelector(`[data-testid=structure-teams-${AGAM}]`);
+    assert(JSON.stringify(await rowsOf()) === JSON.stringify(orig), "structure screen order differs from plan order");
+    // מקלדת: האחרון עולה מקום אחד
+    const last = orig[orig.length - 1];
+    await pAdmin.focus(`[data-testid=team-handle-${last}]`);
+    await pAdmin.keyboard.press("ArrowUp");
+    await pAdmin.waitForTimeout(800);
+    const exp1 = [...orig.slice(0, -2), last, orig[orig.length - 2]];
+    assert(JSON.stringify(await agamTeams()) === JSON.stringify(exp1), `keyboard reorder: ${JSON.stringify(await agamTeams())}`);
+    // גרירה: הראשון אל סוף הרשימה
+    const first = exp1[0], target = exp1[exp1.length - 1];
+    const tb = (await pAdmin.locator(`[data-team-row="${target}"]`).boundingBox())!;
+    await pAdmin.locator(`[data-testid=team-handle-${first}]`).dragTo(pAdmin.locator(`[data-team-row="${target}"]`), { targetPosition: { x: tb.width / 2, y: tb.height - 3 } });
+    await pAdmin.waitForTimeout(900);
+    const exp2 = [...exp1.slice(1), first];
+    assert(JSON.stringify(await agamTeams()) === JSON.stringify(exp2), `drag reorder: ${JSON.stringify(await agamTeams())} expected ${JSON.stringify(exp2)}`);
+    assert(JSON.stringify(await rowsOf()) === JSON.stringify(exp2), "structure screen not updated after drag");
+    // הגאנט מציג את הסדר החדש
+    await pAdmin.goto(`${BASE}/plan?view=gantt`);
+    await pAdmin.waitForSelector(`[data-domain="${AGAM}"] [data-team]`);
+    const ganttOrder = await pAdmin.locator(`[data-testid=gantt-body] [data-domain="${AGAM}"] [data-team]`).evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-team"))));
+    assert(JSON.stringify(ganttOrder) === JSON.stringify(exp2), `gantt order ${JSON.stringify(ganttOrder)}`);
+    await json(admin, "POST", "/api/admin/teams/order", { domainId: AGAM, teamIds: orig });
+  });
+
   await browser.close();
   console.log("\n────────────────────────────────────────");
   const failed = results.filter((r) => !r.ok);

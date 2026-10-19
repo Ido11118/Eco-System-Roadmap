@@ -1,9 +1,9 @@
 "use client";
-// מבנה הגאנט: תחומים קבועים (לקריאה בלבד); צוותים בכל תחום — שינוי שם, הוספה והסרה. למנהל המערכת בלבד.
-import { useState } from "react";
+// מבנה הגאנט: תחומים קבועים (לקריאה בלבד); צוותים בכל תחום — שינוי שם, שינוי סדר (גרירה), הוספה והסרה. למנהל המערכת בלבד.
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Lock, Plus, Trash2, ChevronDown, Loader2, AlertTriangle, Diamond } from "lucide-react";
+import { Lock, Plus, Trash2, ChevronDown, Loader2, AlertTriangle, Diamond, GripVertical } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmtDate, weekNumber, weekYear } from "@/lib/weeks";
 import { useToast } from "@/components/ui/toast";
@@ -23,7 +23,7 @@ export function StructureSettings() {
   return (
     <div className="space-y-3" data-testid="structure-settings">
       <p className="text-[12.5px] text-ink-500">
-        התחומים קבועים ואינם ניתנים לשינוי. בכל תחום אפשר לשנות שמות צוותים, להוסיף צוות ולהסיר צוות.
+        התחומים קבועים ואינם ניתנים לשינוי. בכל תחום אפשר לשנות שמות צוותים, לשנות את סדרם (גרירה בידית שמימין), להוסיף צוות ולהסיר צוות.
         הרשאות העריכה ניתנות לפי תחום — לכן צוות חדש פתוח מיד לעריכה לכל מי שיש לו הרשאה לתחום, והשינויים מופיעים בגאנט, בסינון, בטבלה ובייבוא בעזרת AI.
       </p>
       {(q.data ?? []).map((d) => <DomainCard key={d.id} d={d} onRemove={(team) => setRemoving({ team, domain: d })} />)}
@@ -44,6 +44,36 @@ function DomainCard({ d, onRemove }: { d: SDomain; onRemove: (t: STeam) => void 
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const single = d.teams.length === 1 && d.teams[0].name === d.name;
+  // סדר הצוותים: מוצג מיד בזמן הגרירה, ונשמר בשחרור. מתעדכן מהשרת כשהרשימה משתנה
+  const serverIds = d.teams.map((t) => t.id).join(",");
+  const [order, setOrder] = useState<number[]>(() => d.teams.map((t) => t.id));
+  useEffect(() => { setOrder(d.teams.map((t) => t.id)); }, [serverIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [drag, setDrag] = useState<{ id: number; over: number | null; after: boolean } | null>(null);
+  const [armed, setArmed] = useState<number | null>(null); // גרירה רק מהידית — כדי שלא תפריע לעריכת השם
+  const teamsInOrder = order.map((id) => d.teams.find((t) => t.id === id)).filter(Boolean) as STeam[];
+  const saveOrder = async (next: number[]) => {
+    if (next.join(",") === order.join(",")) return;
+    const prev = order;
+    setOrder(next);
+    try {
+      await api("POST", "/api/admin/teams/order", { domainId: d.id, teamIds: next });
+      toast.show("success", "סדר הצוותים עודכן");
+      refresh();
+    } catch (e) { toast.show("error", (e as Error).message); setOrder(prev); refresh(); }
+  };
+  const move = (id: number, target: number, after: boolean) => {
+    const rest = order.filter((x) => x !== id);
+    let idx = rest.indexOf(target);
+    if (idx < 0) return;
+    if (after) idx++;
+    void saveOrder([...rest.slice(0, idx), id, ...rest.slice(idx)]);
+  };
+  const step = (id: number, dir: -1 | 1) => {
+    const i = order.indexOf(id), j = i + dir;
+    if (j < 0 || j >= order.length) return;
+    const next = [...order]; [next[i], next[j]] = [next[j], next[i]];
+    void saveOrder(next);
+  };
   const add = async () => {
     if (!name.trim() || busy) return;
     setBusy(true);
@@ -61,8 +91,33 @@ function DomainCard({ d, onRemove }: { d: SDomain; onRemove: (t: STeam) => void 
         <span className="flex items-center gap-1 rounded-full bg-ink-100 px-2 py-0.5 text-[11px] text-ink-500" title="התחומים קבועים ואינם ניתנים לעריכה"><Lock size={10} />תחום קבוע</span>
         {single && <span className="text-[11.5px] text-ink-400">מוצג בגאנט כתחום עם צוות יחיד; הוספת צוות תפצל אותו לתחום עם צוותים</span>}
       </div>
-      <div className="divide-y divide-ink-100">
-        {d.teams.map((t) => <TeamRow key={t.id} t={t} last={d.teams.length === 1} onRemove={() => onRemove(t)} />)}
+      <div className="divide-y divide-ink-100" data-testid={`structure-teams-${d.id}`}>
+        {teamsInOrder.map((t) => (
+          <div key={t.id} draggable={armed === t.id} data-team-row={t.id}
+            className={clsx("relative", drag?.id === t.id && "opacity-40")}
+            onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(t.id)); setDrag({ id: t.id, over: null, after: false }); }}
+            onDragOver={(e) => {
+              if (!drag || drag.id === t.id) return;
+              e.preventDefault();
+              const r = e.currentTarget.getBoundingClientRect();
+              const after = e.clientY > r.top + r.height / 2;
+              if (drag.over !== t.id || drag.after !== after) setDrag({ ...drag, over: t.id, after });
+            }}
+            onDrop={(e) => { e.preventDefault(); if (drag && drag.over !== null) move(drag.id, drag.over, drag.after); setDrag(null); setArmed(null); }}
+            onDragEnd={() => { setDrag(null); setArmed(null); }}>
+            {/* קו שמראה לאן הצוות ייכנס */}
+            {drag?.over === t.id && <span className={clsx("pointer-events-none absolute inset-x-0 z-10 h-0.5 rounded bg-brand-500", drag.after ? "-bottom-px" : "-top-px")} />}
+            <TeamRow t={t} last={d.teams.length === 1} onRemove={() => onRemove(t)}
+              handle={d.teams.length > 1 ? (
+                <button className="icon-btn h-7 w-6 shrink-0 cursor-grab text-ink-400 hover:text-ink-700 active:cursor-grabbing" title="גרירה לשינוי הסדר (או חצים למעלה/למטה)"
+                  aria-label={`שינוי מיקום הצוות ${t.name}`} data-testid={`team-handle-${t.id}`}
+                  onMouseDown={() => setArmed(t.id)} onMouseUp={() => { if (!drag) setArmed(null); }}
+                  onKeyDown={(e) => { if (e.key === "ArrowUp") { e.preventDefault(); step(t.id, -1); } if (e.key === "ArrowDown") { e.preventDefault(); step(t.id, 1); } }}>
+                  <GripVertical size={15} />
+                </button>
+              ) : null} />
+          </div>
+        ))}
       </div>
       {adding ? (
         <div className="mt-2 flex items-center gap-2">
@@ -78,7 +133,7 @@ function DomainCard({ d, onRemove }: { d: SDomain; onRemove: (t: STeam) => void 
   );
 }
 
-function TeamRow({ t, last, onRemove }: { t: STeam; last: boolean; onRemove: () => void }) {
+function TeamRow({ t, last, onRemove, handle }: { t: STeam; last: boolean; onRemove: () => void; handle?: React.ReactNode }) {
   const toast = useToast();
   const refresh = useRefresh();
   const [name, setName] = useState(t.name);
@@ -93,6 +148,7 @@ function TeamRow({ t, last, onRemove }: { t: STeam; last: boolean; onRemove: () 
   };
   return (
     <div className="flex items-center gap-3 py-1.5" data-testid={`structure-team-${t.id}`}>
+      {handle}
       <input className={clsx("input h-8 max-w-[260px]", dirty && "border-brand-500")} value={name} onChange={(e) => setName(e.target.value)}
         onBlur={() => void save()} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setName(t.name); }}
         aria-label="שם הצוות" data-testid={`team-name-${t.id}`} />

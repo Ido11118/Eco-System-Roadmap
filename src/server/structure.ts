@@ -1,5 +1,5 @@
 import "server-only";
-// מבנה הגאנט (ניהול מערכת, מנהל המערכת בלבד): תחומים קבועים; צוותים — הוספה, שינוי שם והסרה.
+// מבנה הגאנט (ניהול מערכת, מנהל המערכת בלבד): תחומים קבועים; צוותים — הוספה, שינוי שם, שינוי סדר והסרה.
 // ההרשאות לפי תחום, ולכן שינויי צוותים בתוך תחום אינם משנים הרשאות של אף משתמש.
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -53,6 +53,21 @@ export async function createTeam(me: Me, domainId: number, name: string) {
     for (let i = 0; i < DEFAULT_ROWS_PER_TEAM; i++) await tx.insert(workRows).values({ kind: "TEAM", teamId: id, sortOrder: (i + 1) * 1000, createdById: me.id });
     await audit(tx, me.id, "team", id, "create", { domainId, name: t.name }, `נוסף צוות "${t.name}" לתחום ${d.name}`);
     return { id: t.id, name: t.name };
+  });
+}
+
+/** סדר הצוותים בתוך תחום (גרירה במסך "מבנה הגאנט"): הרשימה חייבת לכלול בדיוק את הצוותים הפעילים בתחום */
+export async function reorderTeams(me: Me, domainId: number, teamIds: number[]) {
+  assertSuper(me);
+  return db.transaction(async (tx) => {
+    const cur = await tx.select({ id: teams.id, name: teams.name, sortOrder: teams.sortOrder }).from(teams)
+      .where(and(eq(teams.domainId, domainId), isNull(teams.archivedAt))).for("update");
+    const same = cur.length === teamIds.length && new Set(teamIds).size === teamIds.length && teamIds.every((id) => cur.some((t) => t.id === id));
+    if (!same) throw new ApiError(409, "רשימת הצוותים השתנתה בינתיים (צוות נוסף או הוסר). רענן ונסה שוב.");
+    for (let i = 0; i < teamIds.length; i++) await tx.update(teams).set({ sortOrder: (i + 1) * 10 }).where(eq(teams.id, teamIds[i]));
+    const names = teamIds.map((id) => cur.find((t) => t.id === id)!.name);
+    await audit(tx, me.id, "team", domainId, "reorder", { teamIds }, `שונה סדר הצוותים: ${names.join(" ← ")}`);
+    return { ok: true };
   });
 }
 
