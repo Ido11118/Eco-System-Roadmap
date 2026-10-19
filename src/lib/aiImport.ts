@@ -9,7 +9,7 @@ export const AI_IMPORT_MAX = 300;
 
 export type CrossKind = "INFLUENCE" | "CROSS_EVENT";
 export const CROSS_LABEL: Record<CrossKind, string> = { INFLUENCE: "גורמים משפיעים", CROSS_EVENT: "מופעים רוחביים" };
-export type ImportKind = "item" | "milestone" | "sprint";
+export type ImportKind = "item" | "milestone" | "sprint" | "backlog";
 
 /** רשומה בתצוגה המקדימה — ניתנת לעריכה לפני האישור */
 export type ImportEntry = {
@@ -19,7 +19,7 @@ export type ImportEntry = {
   notes: string;
   teamId: number | null; // תכולה/אבן דרך
   cross: CrossKind | null; // תכולה בשורה רוחבית
-  domainId: number | null; // ספרינט / אבן דרך של תחום שלם (באבן דרך: teamId ו-domainId שניהם null = רוחבי)
+  domainId: number | null; // ספרינט / אבן דרך של תחום שלם (באבן דרך: teamId ו-domainId שניהם null = רוחבי) / באקלוג (חובה; הצוות לא חובה)
   start: string; // תכולה/ספרינט: התחלה. אבן דרך: התאריך
   end: string;
   status: string; // "" = ברירת מחדל
@@ -39,8 +39,9 @@ export type ImportPayload = {
   items: { name: string; teamId: number | null; cross: CrossKind | null; startWeek: string; endWeek: string; status?: string; priority?: string; notes: string }[];
   milestones: { name: string; date: string; teamId: number | null; domainId: number | null; notes: string }[];
   sprints: { name: string; startDate: string; endDate: string; domainId: number; notes: string }[];
+  backlog: { name: string; domainId: number; teamId: number | null; priority?: string; notes: string }[];
 };
-export type ImportResult = { itemIds: number[]; milestoneIds: number[]; sprintIds: number[]; rowIds: number[] };
+export type ImportResult = { itemIds: number[]; milestoneIds: number[]; sprintIds: number[]; rowIds: number[]; backlogIds: number[] };
 
 // ---------------------------------------------------------------------------
 // פרומפט
@@ -56,18 +57,20 @@ export function buildAiPrompt(data: PlanData, perms: ImportPerms, cat: Catalog, 
   const lines: string[] = [];
   const L = (s = "") => lines.push(s);
 
-  L("אתה עוזר תכנון עבודה. המטרה: לעזור לי לבנות רשימה של תכולות עבודה, אבני דרך וספרינטים, ולהפיק בסוף JSON שאדביק במערכת \"תוכנית עבודה\" של הארגון.");
+  L(`אתה עוזר תכנון עבודה. המטרה: לעזור לי לבנות רשימה של תכולות עבודה, אבני דרך וספרינטים${domains.length ? " (וגם פריטים לבאקלוג)" : ""}, ולהפיק בסוף JSON שאדביק במערכת "תוכנית עבודה" של הארגון.`);
   L();
   L("## איך לעבוד");
   L("- נהל איתי שיחה בעברית. שאל שאלות הבהרה כשחסר מידע (צוות, תאריכים, משך) — אל תמציא פרטים.");
   L("- ייתכן שאעלה קובץ (Excel, מסמך, מצגת) או אדביק טקסט — חלץ ממנו את המידע הרלוונטי והצג לי אותו לאישור.");
-  L("- לפני הפלט הסופי הצג טבלת סיכום קצרה (שם, צוות/תחום, תאריכים) ושאל אם לאשר.");
+  if (domains.length) L("- אם לתכולה עדיין אין זמן ידוע — אל תמציא שבועות: הצע להכניס אותה לבאקלוג (ראה למטה), ושאל אותי.");
+  L("- לפני הפלט הסופי הצג טבלת סיכום קצרה (שם, צוות/תחום, תאריכים, ומה נכנס לבאקלוג) ושאל אם לאשר.");
   L("- הפק את ה-JSON רק כשאבקש \"פלט סופי\" או אחרי שאישרתי את הסיכום.");
   L();
   L("## מה אפשר ליצור");
   if (teams.length || cross) L("1. תכולה (items): יחידת עבודה על פני טווח שבועות — פיצ'ר, מודול, פעילות וכו'.");
   if (teams.length || cross) L("2. אבן דרך (milestones): נקודת ציון בתאריך אחד, בלי טווח (למשל: השקה, הצגת תוכנית, מבצע). אבן דרך משויכת לאחד מהבאים: צוות (team), תחום שלם — כל הצוותים בתחום (domain), או כל הארגון (team = \"CROSS\").");
   if (domains.length) L("3. ספרינט (sprints): טווח תאריכים של תחום שלם (למשל: Sprint 12).");
+  if (domains.length) L("4. פריט לבאקלוג (backlog): רעיון או תכולה שעוד לא שובצו בזמן — בלי שבועות ותאריכים. נכנס לבאקלוג של התחום (רשימה שמשותפת רק עם מי שמורשה לערוך את התחום), ומשם ישובץ בגאנט בהמשך. חובה: domain. צוות (team) — לא חובה.");
   L();
   if (teams.length) {
     L("## צוותים שאני רשאי לערוך — בשדה team השתמש במזהה (באנגלית) בדיוק כפי שמופיע");
@@ -82,7 +85,7 @@ export function buildAiPrompt(data: PlanData, perms: ImportPerms, cat: Catalog, 
   }
   if (domains.length) {
     L();
-    L("## תחומים שאני רשאי לערוך — בשדה domain (של ספרינט, או של אבן דרך לכל התחום) השתמש במזהה");
+    L("## תחומים שאני רשאי לערוך — בשדה domain (של ספרינט, של אבן דרך לכל התחום, או של פריט באקלוג) השתמש במזהה");
     for (const d of domains) L(`- "${d.key}" — ${d.name}`);
   }
   L();
@@ -114,10 +117,15 @@ export function buildAiPrompt(data: PlanData, perms: ImportPerms, cat: Catalog, 
       ...(cross ? [{ name: "אבן דרך לכל הארגון", team: "CROSS", date: today, notes: "" }] : []),
     ],
     sprints: domains.length ? [{ name: "Sprint 1", domain: exDomain, start: today, end: today, notes: "" }] : [],
+    backlog: domains.length ? [
+      { name: "פריט לבאקלוג עם צוות", domain: exDomain, ...(teams.some((t) => domains.some((d) => d.id === t.domainId)) ? { team: teams.find((t) => domains.some((d) => d.id === t.domainId))!.key } : {}), priority: cat.defaultPriority, notes: "" },
+      { name: "פריט לבאקלוג בלי צוות", domain: exDomain, notes: "" },
+    ] : [],
   }, null, 2));
   L("```");
   L("כללים:");
   L("- שדות חובה: name, team (או domain בספרינט), ושבועות/תאריכים. באבן דרך: team לצוות, או domain לכל התחום (לא שניהם), או team = \"CROSS\" לכל הארגון. status, priority ו-notes אופציונליים — השמט אותם אם לא ידועים.");
+  if (domains.length) L("- פריט באקלוג: name ו-domain חובה; team, priority ו-notes אופציונליים. בלי start/end ובלי status. אם צוין team — הוא חייב להיות מאותו תחום.");
   L("- השתמש רק במזהים מהרשימות למעלה. אם ביקשתי צוות או תחום שאינו ברשימה — אמור לי שאין לי הרשאה במקום לכלול אותו.");
   L("- תכולות של אותו צוות יכולות לחפוף בזמן — המערכת תשבץ אותן בשורות נפרדות.");
   L(`- עד ${AI_IMPORT_MAX} פריטים בסך הכל. שם עד 300 תווים.`);
@@ -169,7 +177,7 @@ const newUid = () => `e${++uidSeq}`;
 
 export function parseImport(text: string, data: PlanData, cat: Catalog): ImportEntry[] {
   const j = extractJson(text);
-  if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("מבנה ה-JSON אינו תקין: מצופה אובייקט עם items / milestones / sprints.");
+  if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("מבנה ה-JSON אינו תקין: מצופה אובייקט עם items / milestones / sprints / backlog.");
   const obj = j as Record<string, unknown>;
   const list = (k: string) => {
     const v = obj[k];
@@ -177,9 +185,9 @@ export function parseImport(text: string, data: PlanData, cat: Catalog): ImportE
     if (!Array.isArray(v)) throw new Error(`השדה "${k}" חייב להיות רשימה.`);
     return v.map((x) => (x && typeof x === "object" ? x : {}) as Record<string, unknown>);
   };
-  const items = list("items"), mss = list("milestones"), sps = list("sprints");
-  const total = items.length + mss.length + sps.length;
-  if (!total) throw new Error("ה-JSON לא מכיל תכולות, אבני דרך או ספרינטים.");
+  const items = list("items"), mss = list("milestones"), sps = list("sprints"), bls = list("backlog");
+  const total = items.length + mss.length + sps.length + bls.length;
+  if (!total) throw new Error("ה-JSON לא מכיל תכולות, אבני דרך, ספרינטים או פריטי באקלוג.");
   if (total > AI_IMPORT_MAX) throw new Error(`ניתן לייבא עד ${AI_IMPORT_MAX} פריטים בפעם אחת (התקבלו ${total}).`);
 
   const findTeam = (v: unknown) => {
@@ -240,6 +248,20 @@ export function parseImport(text: string, data: PlanData, cat: Catalog): ImportE
     e.start = parseDate(r.start); e.end = parseDate(r.end);
     out.push(e);
   }
+  for (const r of bls) {
+    // באקלוג: תחום חובה, צוות לא חובה (צוות קובע את התחום שלו). בלי שבועות ובלי סטטוס
+    const e = base("backlog", r);
+    const team = r.team ? findTeam(r.team) : undefined;
+    const d = r.domain ? findDomain(r.domain) : undefined;
+    if (r.team && !team) e.warnings.push(`הצוות "${str(r.team)}" לא קיים במערכת — הפריט ייכנס בלי צוות`);
+    if (team) {
+      e.teamId = team.id; e.domainId = team.domainId;
+      if (d && d.id !== team.domainId) e.warnings.push(`הצוות "${team.name}" לא שייך לתחום "${d.name}" — נקבע התחום של הצוות`);
+    } else if (d) e.domainId = d.id;
+    else e.targetError = r.domain ? `התחום "${str(r.domain)}" לא קיים במערכת` : "לא צוין תחום";
+    e.priority = pick(r.priority, "priority", e.warnings);
+    out.push(e);
+  }
   return out;
 }
 
@@ -255,6 +277,12 @@ export function validateEntry(e: ImportEntry, data: PlanData, perms: ImportPerms
   if (e.notes.length > 5000) errs.push("ההערה ארוכה מדי");
   const okYear = (s: string) => +s.slice(0, 4) >= 2000 && +s.slice(0, 4) <= 2100;
 
+  if (e.kind === "backlog") {
+    if (e.domainId === null) errs.push(e.targetError ?? "לא נבחר תחום");
+    else if (!perms.canEditDomain(e.domainId)) errs.push(`אין לך הרשאת עריכה לתחום "${data.domains.find((d) => d.id === e.domainId)?.name ?? ""}"`);
+    else if (e.teamId !== null && data.teams.find((t) => t.id === e.teamId)?.domainId !== e.domainId) errs.push("הצוות לא שייך לתחום");
+    return errs; // בלי שבועות
+  }
   if (e.kind === "sprint") {
     if (e.domainId === null) errs.push(e.targetError ?? "לא נבחר תחום");
     else if (!perms.canEditDomain(e.domainId)) errs.push(`אין לך הרשאת עריכה לתחום "${data.domains.find((d) => d.id === e.domainId)?.name ?? ""}"`);
@@ -282,7 +310,7 @@ export function validateEntry(e: ImportEntry, data: PlanData, perms: ImportPerms
 }
 
 export function toPayload(entries: ImportEntry[]): ImportPayload {
-  const p: ImportPayload = { items: [], milestones: [], sprints: [] };
+  const p: ImportPayload = { items: [], milestones: [], sprints: [], backlog: [] };
   for (const e of entries) {
     const name = e.name.trim();
     if (e.kind === "item") p.items.push({
@@ -290,6 +318,7 @@ export function toPayload(entries: ImportEntry[]): ImportPayload {
       ...(e.status ? { status: e.status } : {}), ...(e.priority ? { priority: e.priority } : {}), notes: e.notes,
     });
     else if (e.kind === "milestone") p.milestones.push({ name, date: e.start, teamId: e.teamId, domainId: e.teamId !== null ? null : e.domainId, notes: e.notes });
+    else if (e.kind === "backlog") p.backlog.push({ name, domainId: e.domainId!, teamId: e.teamId, ...(e.priority ? { priority: e.priority } : {}), notes: e.notes });
     else p.sprints.push({ name, startDate: e.start, endDate: e.end, domainId: e.domainId!, notes: e.notes });
   }
   return p;

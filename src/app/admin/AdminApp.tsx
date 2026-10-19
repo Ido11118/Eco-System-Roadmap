@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
 import { AppShell } from "@/components/AppShell";
 import { CatalogSettings } from "./CatalogSettings";
+import { StructureSettings } from "./StructureSettings";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm, Dialog } from "@/components/ui/dialog";
 import { fmtTs } from "@/components/plan/ui";
@@ -22,7 +23,7 @@ const STATUS_LABEL = { PENDING: "ממתין לאישור", APPROVED: "מאושר
 const STATUS_CLS = { PENDING: "bg-amber-100 text-amber-800", APPROVED: "bg-green-100 text-green-800", REJECTED: "bg-red-100 text-red-700", SUSPENDED: "bg-ink-200 text-ink-700" };
 
 export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name: string }[] }) {
-  const [tab, setTab] = useState<"users" | "audit" | "settings">("users");
+  const [tab, setTab] = useState<"users" | "audit" | "settings" | "structure">("users");
   const q = useQuery({ queryKey: ["admin-users"], queryFn: () => api<AdminUser[]>("GET", "/api/admin/users"), refetchInterval: 15000 });
   const users = q.data ?? [];
   const pending = users.filter((u) => u.status === "PENDING");
@@ -32,17 +33,17 @@ export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name:
     <AppShell me={me} active="admin">
       <TopBar me={me}><span className="text-[14px] font-semibold text-ink-900">ניהול מערכת</span></TopBar>
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-[1200px] px-6 py-6">
+        <div className="mx-auto max-w-[1200px] px-3 py-4 md:px-6 md:py-6">
           <h1 className="text-[20px] font-bold">ניהול מערכת</h1>
-          <p className="mt-1 text-ink-500">משתמשים והרשאות: אישור משתמש מקנה צפייה בכל תוכנית העבודה, והרשאות עריכה ניתנות לפי תחום ובנפרד למידע הרוחבי. בלשונית &quot;הגדרות&quot; — סטטוסים ותיעדוף.</p>
-          <div className="mt-5 flex gap-1 border-b border-ink-200">
-            {([["users", waiting ? `משתמשים · ${waiting} ממתינים` : "משתמשים"], ["settings", "הגדרות"], ["audit", "יומן פעולות"]] as const).map(([k, l]) => (
+          <p className="mt-1 hidden text-ink-500 md:block">משתמשים והרשאות: אישור משתמש מקנה צפייה בכל תוכנית העבודה, והרשאות עריכה ניתנות לפי תחום ובנפרד למידע הרוחבי. בלשונית &quot;מבנה הגאנט&quot; — צוותים בכל תחום; ב&quot;הגדרות&quot; — סטטוסים ותיעדוף.</p>
+          <div className="mt-5 flex gap-1 overflow-x-auto border-b border-ink-200">
+            {([["users", waiting ? `משתמשים · ${waiting} ממתינים` : "משתמשים"], ["structure", "מבנה הגאנט"], ["settings", "הגדרות"], ["audit", "יומן פעולות"]] as const).map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} data-testid={`admin-tab-${k}`}
-                className={clsx("-mb-px border-b-2 px-3 py-2 text-[13px] font-medium", tab === k ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500 hover:text-ink-900")}>{l}</button>
+                className={clsx("-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-medium", tab === k ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500 hover:text-ink-900")}>{l}</button>
             ))}
           </div>
           <div className="mt-4 space-y-3">
-            {tab === "settings" ? <CatalogSettings /> : tab === "audit" ? <AuditLog /> : (
+            {tab === "settings" ? <CatalogSettings /> : tab === "structure" ? <StructureSettings /> : tab === "audit" ? <AuditLog /> : (
               <UsersPage users={users} pending={pending} requests={reqs.data ?? []} domains={domains} loading={q.isLoading} />
             )}
           </div>
@@ -286,7 +287,7 @@ function UserCard({ u, domains }: { u: AdminUser; domains: { id: number; name: s
 
 function AuditLog() {
   const q = useQuery({ queryKey: ["audit"], queryFn: () => api<{ id: number; at: string; entityType: string; entityId: string; action: string; summary: string; userName: string | null }[]>("GET", "/api/admin/audit?limit=500") });
-  const ET: Record<string, string> = { item: "תכולה", row: "שורה", milestone: "אבן דרך", sprint: "ספרינט", snapshot: "Snapshot", user: "משתמש", catalog: "הגדרות", import: "ייבוא AI" };
+  const ET: Record<string, string> = { item: "תכולה", row: "שורה", milestone: "אבן דרך", sprint: "ספרינט", snapshot: "Snapshot", user: "משתמש", catalog: "הגדרות", import: "ייבוא AI", team: "צוות" };
   return (
     <div className="card overflow-hidden">
       <table className="w-full text-[12.5px]">

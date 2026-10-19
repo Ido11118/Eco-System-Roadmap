@@ -76,7 +76,7 @@ function StatusesCard({ data }: { data: AdminCatalog }) {
         <h2 className="text-[15px] font-semibold">סטטוסים</h2>
         <p className="text-[12px] text-ink-500">הצבע קובע את צבע הקובייה בגאנט, בטבלה, בסינון ובמקרא. &quot;משמעות&quot; קובעת איך הסטטוס נספר בתכנון מול ביצוע (למשל &quot;הושלם&quot;).</p>
       </header>
-      <table className="w-full text-[12.5px]">
+      <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-[12.5px]">
         <thead className="bg-ink-50 text-ink-500">
           <tr>{["", "צבע", "שם", "תצוגה", "משמעות", "המלצה להערה", "ברירת מחדל", "תכולות", ""].map((h, i) => <th key={i} className="px-2 py-1.5 text-start font-medium">{h}</th>)}</tr>
         </thead>
@@ -117,7 +117,7 @@ function StatusesCard({ data }: { data: AdminCatalog }) {
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
       <Archived kind="statuses" items={archived.map((x) => ({ key: x.key, label: x.label, swatch: <Swatch bg={x.bg} label={x.label} /> }))} mutate={mutate} />
       <form className="flex flex-wrap items-center gap-2 border-t border-ink-100 bg-ink-50/50 px-4 py-2.5"
         onSubmit={async (e) => { e.preventDefault(); if (!nw.label.trim()) return; if (await mutate("POST", "/api/admin/statuses", { ...nw, label: nw.label.trim() }, "הסטטוס נוסף")) setNw({ ...nw, label: "" }); }}>
@@ -155,7 +155,7 @@ function PrioritiesCard({ data }: { data: AdminCatalog }) {
         <h2 className="text-[15px] font-semibold">תיעדוף</h2>
         <p className="text-[12px] text-ink-500">הסדר קובע את סדר המיון בטבלה (הראשון = החשוב ביותר). ברירת המחדל (למשל &quot;ללא&quot;) ניתנת לתכולה חדשה ומוצגת אחרונה במיון.</p>
       </header>
-      <table className="w-full text-[12.5px]">
+      <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-[12.5px]">
         <thead className="bg-ink-50 text-ink-500">
           <tr>{["", "צבע", "שם", "ברירת מחדל", "תכולות", ""].map((h, i) => <th key={i} className="px-2 py-1.5 text-start font-medium">{h}</th>)}</tr>
         </thead>
@@ -188,7 +188,7 @@ function PrioritiesCard({ data }: { data: AdminCatalog }) {
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
       <Archived kind="priorities" items={archived.map((x) => ({ key: x.key, label: x.label, swatch: <span className="font-semibold" style={{ color: x.color }}>{x.label}</span> }))} mutate={mutate} />
       <form className="flex flex-wrap items-center gap-2 border-t border-ink-100 bg-ink-50/50 px-4 py-2.5"
         onSubmit={async (e) => { e.preventDefault(); if (!nw.label.trim()) return; if (await mutate("POST", "/api/admin/priorities", { ...nw, label: nw.label.trim() }, "התיעדוף נוסף")) setNw({ ...nw, label: "" }); }}>

@@ -15,10 +15,13 @@ import { api } from "@/lib/api";
 import type { PlanStore } from "@/components/plan/store";
 import { useWorkspaceUI, placeLabel, userName, fmtTs } from "@/components/plan/ui";
 import { itemMatches, timeWindow, visibleTeamIds } from "@/components/plan/filters";
+import { useIsMobile } from "@/components/ui/useMobile";
 import { WeekPicker } from "@/components/plan/WeekPicker";
 import { currentPrefs, savePrefs, uiZoom } from "@/components/plan/prefs";
+import { DepsCell } from "@/components/plan/Dependencies";
+import { depsOf, openDeps } from "@/lib/deps";
 
-type ColKey = "domain" | "team" | "id" | "name" | "priority" | "status" | "notes" | "start" | "end" | "createdBy" | "updatedAt";
+type ColKey = "domain" | "team" | "name" | "priority" | "status" | "notes" | "deps" | "start" | "end" | "createdBy" | "updatedAt";
 const COLS: { key: ColKey; label: string; w: number; sticky?: boolean }[] = [
   { key: "domain", label: "תחום", w: 110, sticky: true },
   { key: "team", label: "צוות", w: 130, sticky: true },
@@ -26,11 +29,12 @@ const COLS: { key: ColKey; label: string; w: number; sticky?: boolean }[] = [
   { key: "priority", label: "תיעדוף", w: 100 },
   { key: "status", label: "סטטוס", w: 150 },
   { key: "notes", label: "הערות", w: 260 },
+  { key: "deps", label: "תלויות", w: 220 },
   { key: "start", label: "שבוע התחלה", w: 150 },
   { key: "end", label: "שבוע סיום", w: 150 },
   { key: "createdBy", label: "מי הזין", w: 130 },
   { key: "updatedAt", label: "עדכון אחרון", w: 150 },
-  { key: "id", label: "ID", w: 60 }, // הכי שמאלית — מידע טכני
+  // אין עמודת ID — המזהה נשמר מאחורי הקלעים (חיפוש לפי ID עדיין עובד)
 ];
 const CHECK_W = 0; // אין עמודת תיבות סימון — בחירה מרובה ב-Ctrl/Shift + לחיצה
 
@@ -41,6 +45,7 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
   const ui = useWorkspaceUI();
   const toast = useToast();
   const cat = useCatalog();
+  const mobile = useIsMobile();
   const [sort, setSort] = useState<{ key: ColKey; dir: 1 | -1 } | null>(null);
   const [grouped, setGrouped] = useState(true);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -78,11 +83,11 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
       switch (sort.key) {
         case "domain": return r.domainOrder;
         case "team": return r.domainOrder * 10000 + r.teamOrder;
-        case "id": return r.item.id;
         case "name": return r.item.name;
         case "priority": return r.item.priority === cat.defaultPriority ? 1e9 : cat.priority(r.item.priority).sortOrder; // "ללא" בסוף
         case "status": return cat.status(r.item.status).sortOrder;
         case "notes": return r.item.notes;
+        case "deps": return -(openDeps(r.item).length * 1000 + depsOf(r.item).length); // קודם אלה עם הכי הרבה תלויות פתוחות
         case "start": return r.item.startWeek;
         case "end": return r.item.endWeek;
         case "createdBy": return userName(data, r.item.createdById);
@@ -166,6 +171,8 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
 
   const stickyRight = (k: ColKey) => (k === "domain" ? CHECK_W : k === "team" ? CHECK_W + widths.domain : undefined);
   const totalW = CHECK_W + COLS.reduce((s, c) => s + widths[c.key], 0);
+
+  if (mobile) return <MobileItemList rows={sorted} grouped={groupedOn} onOpen={(id) => ui.openItem(id)} />;
 
   let lastGroup = "";
   return (
@@ -264,13 +271,11 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
                     </select>
                   </td>
                   <td className={cell}><NotesCell item={i} editable={r.editable} store={store} /></td>
+                  <td className={cell}><DepsCell item={i} editable={r.editable} onOpen={() => ui.openItem(i.id)} /></td>
                   <td className={cell}><WeekCell item={i} field="startWeek" editable={r.editable} store={store} /></td>
                   <td className={cell}><WeekCell item={i} field="endWeek" editable={r.editable} store={store} /></td>
                   <td className={clsx(cell, "truncate text-ink-500")}>{userName(data, i.createdById)}</td>
                   <td className={clsx(cell, "truncate text-ink-500")} title={`ע״י ${userName(data, i.updatedById)}`}>{fmtTs(i.updatedAt)}</td>
-                  <td className={clsx(cell, "font-mono text-[11.5px] text-ink-500")}>
-                    <button className="flex items-center gap-1 hover:text-brand-600" onClick={() => ui.openItem(i.id)} title="פתח פרטים">{i.id}<ExternalLink size={11} className="opacity-0 group-hover:opacity-100" /></button>
-                  </td>
                 </tr>,
               ];
             })}
@@ -366,9 +371,14 @@ function NameCell({ item, editable, store, onOpen }: { item: ItemDTO; editable: 
     );
   }
   return (
-    <div className={clsx("truncate rounded px-1 -mx-1 py-0.5 font-medium text-ink-900", editable && "cursor-text hover:bg-ink-100")}
-      onClick={() => { if (editable) { setV(item.name); setEdit(true); } else onOpen(); }} title={item.name}>
-      {item.name}
+    <div className="flex min-w-0 items-center gap-1">
+      <div className={clsx("min-w-0 flex-1 truncate rounded px-1 -mx-1 py-0.5 font-medium text-ink-900", editable && "cursor-text hover:bg-ink-100")}
+        onClick={() => { if (editable) { setV(item.name); setEdit(true); } else onOpen(); }} title={item.name}>
+        {item.name}
+      </div>
+      {/* פתיחת חלונית הפרטים (במקום עמודת ה-ID שהוסרה) */}
+      <button className="icon-btn h-6 w-6 shrink-0 text-ink-400 opacity-0 hover:text-brand-600 group-hover:opacity-100 focus:opacity-100" onClick={onOpen}
+        title="פתח פרטים" aria-label={`פתח פרטי ${item.name}`} data-testid={`open-item-${item.id}`}><ExternalLink size={13} /></button>
     </div>
   );
 }
@@ -421,5 +431,40 @@ function WeekCell({ item, field, editable, store }: { item: ItemDTO; field: "sta
         </div>
       </Floating>
     </>
+  );
+}
+
+/** טלפון: במקום טבלה רחבה — כרטיס לכל תכולה (שם, סטטוס, תיעדוף, שבועות), מקובצים לפי תחום וצוות. הקשה פותחת את חלונית התכולה. */
+function MobileItemList({ rows, grouped, onOpen }: { rows: Row[]; grouped: boolean; onOpen: (id: number) => void }) {
+  const cat = useCatalog();
+  const wk = (s: string) => `${weekNumber(s)}`;
+  let last = "";
+  return (
+    <div className="flex h-full flex-col bg-ink-50/50" data-testid="table-view">
+      <div className="border-b border-ink-200 bg-white px-3 py-1.5 text-[12px] text-ink-500">{rows.length} תכולות · הקשה על תכולה לפרטים ועריכה</div>
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-auto px-2 py-2" data-testid="mobile-item-list">
+        {rows.length === 0 && <div className="p-10 text-center text-ink-500">אין תכולות להצגה לפי הסינון הנוכחי</div>}
+        {rows.map((r) => {
+          const g = `${r.domain} / ${r.team}`;
+          const header = grouped && g !== last;
+          last = g;
+          const i = r.item, st = cat.status(i.status), pr = cat.priority(i.priority);
+          const weeks = i.startWeek === i.endWeek ? `שבוע ${wk(i.startWeek)}` : `שבועות ${wk(i.startWeek)}–${wk(i.endWeek)}`;
+          return [
+            header && <div key={`g-${g}`} className="px-1 pb-0.5 pt-2 text-[12.5px] font-bold text-ink-700">{r.domain}{r.team !== r.domain && <span className="font-medium text-ink-500"> / {r.team}</span>}</div>,
+            <button key={i.id} onClick={() => onOpen(i.id)} data-item-card={i.id}
+              className="block w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-start shadow-sm active:bg-brand-50">
+              <div className="line-clamp-2 text-[14px] font-medium leading-snug text-ink-900">{i.name}</div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+                <span className="rounded-full border px-2 py-0.5 font-medium" style={{ background: st.bg, color: st.fg, borderColor: st.border }}>{st.label}</span>
+                {i.priority !== cat.defaultPriority && <span className="font-medium" style={{ color: pr.color }}>{pr.label}</span>}
+                <span className="tabular-nums text-ink-500">{weeks} · {weekYear(i.startWeek)}</span>
+                {!grouped && <span className="text-ink-400">{r.team}</span>}
+              </div>
+            </button>,
+          ];
+        })}
+      </div>
+    </div>
   );
 }

@@ -12,7 +12,7 @@ export function WeekPicker({ value, onChange, disabled, min, id }: {
     <div className="flex items-center gap-1">
       <button type="button" className="icon-btn" disabled={disabled || (!!min && addWeeks(value, -1) < min)} onClick={() => onChange(addWeeks(value, -1))} aria-label="שבוע קודם"><ChevronRight size={14} /></button>
       <label className="relative flex-1">
-        <span className="input flex items-center text-[12.5px] tabular-nums">{label}</span>
+        <span className="input flex items-center truncate whitespace-nowrap text-[12.5px] tabular-nums">{label}</span>
         <input id={id} type="date" disabled={disabled} value={value} min={min}
           onChange={(e) => { if (isISODate(e.target.value)) onChange(weekStartOf(e.target.value)); }}
           className="absolute inset-0 cursor-pointer opacity-0" aria-label={label} />

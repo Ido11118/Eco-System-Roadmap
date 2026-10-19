@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
-import { ChevronDown, LogOut, ShieldCheck, Settings } from "lucide-react";
+import { ChevronDown, LogOut, ShieldCheck, Settings, Menu } from "lucide-react";
+import { useMobileNav } from "./AppShell";
 import { UserSettingsDialog } from "./UserSettings";
 import type { Me } from "@/lib/types";
 import { api } from "@/lib/api";
@@ -11,8 +12,10 @@ export function TopBar({ me, children }: { me: Me; children?: React.ReactNode })
   const [settings, setSettings] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
   const initials = me.fullName.split(/\s+/).map((p) => p[0]).slice(0, 2).join("");
+  const openNav = useMobileNav(); // בטלפון: כפתור ☰ לפתיחת תפריט הניווט
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 overflow-x-auto overflow-y-hidden border-b border-ink-200 bg-white px-4">
+    <header className="flex h-12 shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b border-ink-200 bg-white px-2 md:gap-3 md:px-4">
+      {openNav && <button className="icon-btn shrink-0" onClick={openNav} aria-label="תפריט" data-testid="mobile-menu"><Menu size={19} /></button>}
       <div className="flex flex-1 items-center gap-3 whitespace-nowrap">{children}</div>
       <button ref={btn} className="flex shrink-0 items-center gap-2 rounded-md px-1.5 py-1 hover:bg-ink-100" onClick={() => setOpen((o) => !o)} data-testid="user-menu">
         <span className="flex h-7 w-7 items-center justify-center rounded-full bg-ink-800 bg-gradient-to-br from-brand-500 to-brand-700 text-[11px] font-bold text-white">{initials}</span>

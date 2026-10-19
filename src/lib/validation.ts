@@ -9,6 +9,13 @@ const notes = z.string().max(5000, "ההערה ארוכה מדי");
 const status = z.string().trim().min(1).max(40);
 const priority = z.string().trim().min(1).max(40);
 const id = z.number().int().positive();
+const dependency = z.object({
+  id: z.string().min(1).max(40),
+  text: z.string().trim().min(1, "יש לתאר את התלות").max(300, "תיאור התלות ארוך מדי"),
+  on: z.string().trim().max(80).default(""),
+  done: z.boolean().default(false),
+});
+const dependencies = z.array(dependency).max(30, "יותר מדי תלויות לתכולה אחת");
 
 export const registerSchema = z.object({
   fullName: z.string().trim().min(2, "יש להזין שם מלא").max(120),
@@ -28,15 +35,30 @@ export const resetSchema = z.object({ token: z.string().min(10), password: z.str
 
 export const createItemSchema = z.object({
   rowId: id, name, startWeek: sunday, endWeek: sunday,
-  status: status.optional(), priority: priority.optional(), notes: notes.optional(),
+  status: status.optional(), priority: priority.optional(), notes: notes.optional(), dependencies: dependencies.optional(),
 }).refine((v) => v.endWeek >= v.startWeek, { message: "שבוע הסיום אינו יכול להיות לפני שבוע ההתחלה" });
 
 export const updateItemSchema = z.object({
   version: z.number().int(),
   patch: z.object({
     name: name.optional(), status: status.optional(), priority: priority.optional(), notes: notes.optional(),
+    dependencies: dependencies.optional(),
     startWeek: sunday.optional(), endWeek: sunday.optional(), rowId: id.optional(),
   }).strict(),
+});
+
+export const createBacklogSchema = z.object({ name, domainId: id.optional(), teamId: id.nullable().optional(), priority: priority.optional(), notes: notes.optional() })
+  .refine((v) => v.domainId || v.teamId, "יש לבחור תחום");
+export const updateBacklogSchema = z.object({
+  version: z.number().int(),
+  patch: z.object({ name: name.optional(), domainId: id.optional(), teamId: id.nullable().optional(), priority: priority.optional(), notes: notes.optional() }).strict(),
+});
+export const scheduleBacklogSchema = z.object({
+  version: z.number().int(),
+  item: z.object({
+    rowId: id, name, startWeek: sunday, endWeek: sunday,
+    status: status.optional(), priority: priority.optional(), notes: notes.optional(),
+  }).refine((v) => v.endWeek >= v.startWeek, { message: "שבוע הסיום אינו יכול להיות לפני שבוע ההתחלה" }),
 });
 
 export const bulkItemsSchema = z.object({
@@ -98,10 +120,12 @@ export const preferencesSchema = z.object({
   density: z.enum(["compact", "normal", "wide"]).optional(),
   tableColumnWidths: z.record(z.string(), z.number().min(40).max(1000)).optional(),
   lastView: viewConfigSchema.optional(),
-  lastMode: z.enum(["gantt", "table", "compare"]).optional(),
+  lastMode: z.enum(["gantt", "table", "compare", "backlog"]).optional(),
   sidebarCollapsed: z.boolean().optional(),
   textSize: z.enum(["sm", "md", "lg", "xl"]).optional(),
   tableCollapsed: z.array(z.number().int()).max(500).optional(),
+  viewOnly: z.boolean().optional(),
+  ganttCols: z.object({ domain: z.number().int().min(60).max(320), team: z.number().int().min(80).max(400) }).optional(),
   barFontSize: z.number().int().min(9).max(16).optional(),
 }).strict();
 
@@ -117,7 +141,7 @@ export const adminUserActionSchema = z.discriminatedUnion("action", [
 // --- Snapshot data (מבנה זהה ל-PlanData) ---
 const itemDTO = z.object({
   id: z.number().int(), name, rowId: z.number().int(), teamId: z.number().int().nullable(),
-  startWeek: sunday, endWeek: sunday, status, priority, notes: z.string(),
+  startWeek: sunday, endWeek: sunday, status, priority, notes: z.string(), dependencies: dependencies.optional(),
   version: z.number().int(), createdAt: z.string(), createdById: z.number().int().nullable(),
   updatedAt: z.string(), updatedById: z.number().int().nullable(),
 }).refine((v) => v.endWeek >= v.startWeek, { message: "שבוע הסיום אינו יכול להיות לפני שבוע ההתחלה" });
@@ -194,10 +218,19 @@ const importMilestone = z.object({ name, date: isoDate, teamId: id.nullable(), d
   .refine((v) => v.teamId === null || v.domainId === null, { message: "אבן דרך משויכת לצוות או לתחום — לא לשניהם" });
 const importSprint = z.object({ name, startDate: isoDate, endDate: isoDate, domainId: id, notes })
   .refine((v) => v.endDate >= v.startDate, { message: "תאריך הסיום אינו יכול להיות לפני תאריך ההתחלה" });
+const importBacklog = z.object({ name, domainId: id, teamId: id.nullable().default(null), priority: priority.optional(), notes });
+const importTotal = (v: { items: unknown[]; milestones: unknown[]; sprints: unknown[]; backlog: unknown[] }) => v.items.length + v.milestones.length + v.sprints.length + v.backlog.length;
 export const importSchema = z.object({
   items: z.array(importItem).max(300), milestones: z.array(importMilestone).max(300), sprints: z.array(importSprint).max(300),
-}).refine((v) => v.items.length + v.milestones.length + v.sprints.length > 0, "אין מה לייבא")
-  .refine((v) => v.items.length + v.milestones.length + v.sprints.length <= 300, "ניתן לייבא עד 300 פריטים בפעם אחת");
+  backlog: z.array(importBacklog).max(300).default([]),
+}).refine((v) => importTotal(v) > 0, "אין מה לייבא")
+  .refine((v) => importTotal(v) <= 300, "ניתן לייבא עד 300 פריטים בפעם אחת");
 export const importUndoSchema = z.object({
   itemIds: z.array(id).max(300), milestoneIds: z.array(id).max(300), sprintIds: z.array(id).max(300), rowIds: z.array(id).max(300),
+  backlogIds: z.array(id).max(300).default([]),
 });
+
+// מבנה הגאנט (ניהול מערכת): צוותים בלבד — תחומים קבועים
+const teamName = z.string().trim().min(1, "יש להזין שם צוות").max(60, "שם הצוות ארוך מדי");
+export const teamCreateSchema = z.object({ domainId: id, name: teamName });
+export const teamRenameSchema = z.object({ name: teamName });

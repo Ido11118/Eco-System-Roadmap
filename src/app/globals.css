@@ -31,6 +31,13 @@ body {
 * { scrollbar-width: thin; scrollbar-color: #c3cad6 transparent; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #c3cad6; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+/* הגאנט: פס גלילה עבה ובולט יותר (בעיקר האופקי בתחתית) — כדי שיהיה ברור שאפשר לגלול לצדדים.
+   scrollbar-width/color הם התקן (Chrome 121+, Firefox) וגוברים על ::-webkit-scrollbar; השאר — לדפדפנים ישנים */
+.gantt-scroll { scrollbar-width: auto; scrollbar-color: #94a3b8 #eef1f5; }
+.gantt-scroll::-webkit-scrollbar { width: 14px; height: 16px; }
+.gantt-scroll::-webkit-scrollbar-track { background: #eef1f5; }
+.gantt-scroll::-webkit-scrollbar-thumb { background: #94a3b8; border: 3px solid #eef1f5; border-radius: 10px; background-clip: padding-box; }
+.gantt-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
 
 @layer components {
   .btn {
@@ -121,3 +128,8 @@ tr.locate-flash { animation: none; background: #dbeafe !important; transition: b
 .anim-in { animation: fadein .14s ease-out; }
 @keyframes slidein { from { transform: translateX(-16px); opacity: 0; } to { transform: none; opacity: 1; } }
 .anim-drawer { animation: slidein .16s ease-out; }
+
+/* טלפון: שדות קלט בגודל 16px לפחות — אחרת Safari ב-iPhone מגדיל (zoom) את הדף בכל לחיצה על שדה */
+@media (max-width: 767px) {
+  input, select, textarea { font-size: 16px !important; }
+}

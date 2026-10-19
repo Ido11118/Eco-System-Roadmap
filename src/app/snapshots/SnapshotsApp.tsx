@@ -22,7 +22,7 @@ export function SnapshotsApp({ me }: { me: Me }) {
     <AppShell me={me} active="snapshots">
       <TopBar me={me}><span className="text-[14px] font-semibold text-ink-900">תמונות מצב</span></TopBar>
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-[1000px] px-6 py-6">
+        <div className="mx-auto max-w-[1000px] px-3 py-4 md:px-6 md:py-6">
           <h1 className="text-[20px] font-bold">תמונות מצב (Snapshots)</h1>
           <p className="mt-1 text-ink-500">
             עותקים היסטוריים של תוכנית העבודה. ניתן לצפות בכל תמונת מצב או להשתמש בה להשוואת תכנון מול ביצוע.

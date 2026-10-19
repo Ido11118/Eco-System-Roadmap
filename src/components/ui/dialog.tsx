@@ -27,14 +27,16 @@ export function Dialog({
   }, [open]);
   if (!open || typeof document === "undefined") return null;
   return createPortal(
-    <div className="fixed inset-0 z-[80] flex items-start justify-center bg-ink-900/30 pt-[10vh] px-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={ref} role="dialog" aria-modal="true" className="anim-in card shadow-pop w-full max-h-[80vh] flex flex-col" style={{ maxWidth: width }}>
+    // טלפון: החלון ממלא את המסך (בלי שוליים); מ-md ומעלה — חלון ממורכז ברוחב שנקבע
+    <div className="fixed inset-0 z-[80] flex items-stretch justify-center bg-ink-900/30 md:items-start md:px-4 md:pt-[10vh]" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={ref} role="dialog" aria-modal="true" className="anim-in card shadow-pop flex w-full flex-col max-md:h-[100dvh] max-md:max-w-none max-md:rounded-none max-md:border-0 md:max-h-[80vh] md:max-w-[var(--dlg-w)]"
+        style={{ "--dlg-w": `${width}px` } as React.CSSProperties}>
         <div className="flex items-center justify-between px-5 pt-4 pb-2">
           <h2 className="text-[15px] font-semibold text-ink-900">{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="סגור"><X size={16} /></button>
         </div>
-        <div className="px-5 pb-4 overflow-auto">{children}</div>
-        {footer && <div className="flex items-center justify-start gap-2 border-t border-ink-100 px-5 py-3 bg-ink-50/60 rounded-b-xl">{footer}</div>}
+        <div className="min-h-0 flex-1 overflow-auto px-5 pb-4 md:flex-initial">{children}</div>
+        {footer && <div className="flex flex-wrap items-center justify-start gap-2 border-t border-ink-100 bg-ink-50/60 px-5 py-3 md:rounded-b-xl">{footer}</div>}
       </div>
     </div>,
     document.body,

@@ -14,6 +14,7 @@ import {
   buildCompareLayout, summarize, datesChanged, COMPARE_FILTERS, TAG_LABELS, type CompareUnit,
 } from "@/lib/compare";
 import { buildTimeline, fmtDate, weekEndOf, weekNumber, type ISODate } from "@/lib/weeks";
+import { useIsMobile } from "@/components/ui/useMobile";
 import { useTooltip } from "@/components/ui/tooltip";
 import { useWorkspaceUI } from "@/components/plan/ui";
 import { crossRowVisible, itemMatches, timeWindow, visibleTeamIds } from "@/components/plan/filters";
@@ -33,7 +34,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
   const cat = useCatalog();
   const [barFont] = useBarFontSize(ui.me.preferences);
   const gridRef = useRef<GanttGridHandle>(null);
-  const { weekW, rowH, crossLaneH } = geometry(view.density, true);
+  const { weekW, rowH, crossLaneH } = geometry(view.density, true, useIsMobile());
   const merged = useMemo<PlanData>(() => ({ ...current, items: [...current.items, ...baseline.items] }), [current, baseline]);
   const [w0, w1] = timeWindow(view.time, merged);
   const timeline = useMemo(() => buildTimeline(w0, w1), [w0, w1]);
@@ -153,19 +154,21 @@ export const CompareView = memo(forwardRef<CompareHandle, {
         <div key={u.id} data-unit={u.id}>
           {pb && (
             <div {...events} data-plan={u.id}
-              className={clsx("plan-dash absolute z-10 flex items-center overflow-hidden rounded-[5px]", deleted ? "is-deleted cursor-default" : "cursor-pointer")}
+              className={clsx("plan-dash absolute z-10 flex items-center overflow-clip rounded-[5px]", deleted ? "is-deleted cursor-default" : "cursor-pointer")}
               style={{ right: pb.right, width: pb.width, top: 2, height: h - 4 }}>
-              {deleted && <span className="truncate px-1.5 text-[11.5px] text-red-700 line-through decoration-red-400">{u.name} · נמחק</span>}
+              {deleted && <span className="sticky min-w-0 truncate px-1.5 text-[11.5px] text-red-700 line-through decoration-red-400" style={{ right: "var(--labels-w)" }}>{u.name} · נמחק</span>}
             </div>
           )}
           {link && <div className="plan-link pointer-events-none absolute z-[9]" data-link={u.id} data-dir={link.dir}
             style={{ right: link.right, width: link.width, top: h / 2 - 0.75, height: 1.5 }} />}
           {ab && m && (
             <div {...events} data-actual={u.id}
-              className="gantt-bar absolute z-[11] flex cursor-pointer items-center gap-1 overflow-hidden rounded-[5px] border text-[12px] font-medium"
+              className="gantt-bar absolute z-[11] flex cursor-pointer items-center overflow-clip rounded-[5px] border text-[12px] font-medium"
               style={{ right: ab.right + (changed ? 2 : 0), width: ab.width - (changed ? 4 : 0), top: changed ? 6 : 3, height: changed ? h - 12 : h - 6, background: m.bg, color: m.fg, borderColor: m.border, fontSize: barFont }}>
-              {added && <span className="mr-1 shrink-0 rounded bg-brand-600 px-1 text-[9.5px] font-bold text-white">חדש</span>}
-              <span className="truncate px-1">{u.name}</span>
+              <span className="sticky flex min-w-0 items-center gap-1 px-1" style={{ right: "var(--labels-w)" }}>
+                {added && <span className="shrink-0 rounded bg-brand-600 px-1 text-[9.5px] font-bold text-white">חדש</span>}
+                <span className="truncate">{u.name}</span>
+              </span>
             </div>
           )}
         </div>
@@ -256,9 +259,9 @@ function CompareSummaryBar({ summary: s, units, current, filterKey, onFilterKey,
     }).filter((x) => x.s.planned + x.s.added > 0);
   }, [units, current]);
   return (
-    <div className="border-b border-ink-200 bg-white px-4 py-1.5">
-      {/* שורה 1: מדדים קומפקטיים (לחיצה = סינון) + פירוק לפי תחום */}
-      <div className="flex flex-wrap items-center gap-1.5">
+    <div className="border-b border-ink-200 bg-white px-2 py-1.5 md:px-4">
+      {/* שורה 1: מדדים קומפקטיים (לחיצה = סינון) + פירוק לפי תחום. בטלפון — שורה אחת עם גלילה הצידה */}
+      <div className="flex items-center gap-1.5 max-md:overflow-x-auto max-md:[&>*]:shrink-0 md:flex-wrap">
         {tiles.map((t) => (
           <button key={t.k} onClick={() => onFilterKey(t.k)} title={t.sub ? `${t.label} · ${t.sub} — לחיצה לסינון` : `${t.label} — לחיצה לסינון`}
             data-tile={t.k}
@@ -266,7 +269,7 @@ function CompareSummaryBar({ summary: s, units, current, filterKey, onFilterKey,
               filterKey === t.k ? "border-brand-500 bg-brand-50" : "border-ink-200 bg-white")}>
             <span className="self-center text-[15px] font-bold tabular-nums leading-none" style={{ color: t.color }}>{t.v}</span>
             <span className="self-center text-[12px] text-ink-600">{t.label}</span>
-            {t.sub && <span className="self-center text-[10.5px] text-ink-400">{t.sub}</span>}
+            {t.sub && <span className="hidden self-center text-[10.5px] text-ink-400 md:inline">{t.sub}</span>}
           </button>
         ))}
         <select className="input h-8 w-auto py-0 text-[12px]" value={filterKey} onChange={(e) => onFilterKey(e.target.value)} data-testid="compare-filter" aria-label="סינון לפי סוג שינוי">
@@ -276,8 +279,8 @@ function CompareSummaryBar({ summary: s, units, current, filterKey, onFilterKey,
           פירוק לפי תחום {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
       </div>
-      {/* שורה 2: מה משווים + מקרא — שורה דקה אחת */}
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-ink-500">
+      {/* שורה 2: מה משווים + מקרא — שורה דקה אחת (בטלפון מוסתרת: המצבים מופיעים בסרגל העליון) */}
+      <div className="mt-1 flex flex-wrap items-center max-md:hidden gap-x-3 gap-y-0.5 text-[11.5px] text-ink-500">
         <span className="flex items-center gap-1.5" data-testid="compare-sides">
           תכנון: <b className="text-ink-700">{planLabel}</b>
           <span className="text-ink-300">←</span>

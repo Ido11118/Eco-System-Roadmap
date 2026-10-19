@@ -10,7 +10,7 @@ import path from "path";
 import crypto from "crypto";
 import { asc, eq, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { statuses, priorities, workItems, appSettings } from "@/db/schema";
+import { statuses, priorities, workItems, backlogItems, appSettings } from "@/db/schema";
 import type * as schema from "@/db/schema";
 
 type Db = NodePgDatabase<typeof schema>;
@@ -109,6 +109,7 @@ export async function applyCatalogFile(db: Db): Promise<"applied" | "unchanged" 
     }
     for (const p of changedP.filter((x) => x.archived && x.replacedBy)) {
       await tx.update(workItems).set({ priority: p.replacedBy!, version: sql`${workItems.version} + 1`, updatedAt: new Date() }).where(eq(workItems.priority, p.key));
+      await tx.update(backlogItems).set({ priority: p.replacedBy!, version: sql`${backlogItems.version} + 1`, updatedAt: new Date() }).where(eq(backlogItems.priority, p.key));
     }
     for (const [k, v] of [[HASH_KEY, hash], [CONTENT_KEY, text]] as const) {
       await tx.insert(appSettings).values({ key: k, value: v }).onConflictDoUpdate({ target: appSettings.key, set: { value: v, updatedAt: new Date() } });

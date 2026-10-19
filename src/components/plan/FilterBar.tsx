@@ -13,11 +13,13 @@ import { api } from "@/lib/api";
 import { MultiSelect, Floating } from "@/components/ui/popover";
 import { useTooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
-import { useConfirm } from "@/components/ui/dialog";
+import { useConfirm, Dialog } from "@/components/ui/dialog";
+import { useIsMobile } from "@/components/ui/useMobile";
 import { shiftTime, timeLabel, defaultViewConfig, CROSS_FILTER } from "./filters";
 import { CROSS_ROW_LABELS } from "@/lib/constants";
 import { sanitizeView, TEXT_SIZES, useTextSize, useBarFontSize, BAR_FONT } from "./prefs";
 import { useMe } from "./ui";
+import { depsOf } from "@/lib/deps";
 
 export type SavedView = { id: number; name: string; config: ViewConfig; isDefault: boolean };
 
@@ -37,31 +39,63 @@ export function FilterBar({ data, view, setView, onToday, mode, onLocate }: {
   const teamOpts = data.teams
     .filter((t) => view.domainIds.length === 0 || view.domainIds.includes(t.domainId))
     .map((t) => ({ value: t.id, label: t.name, group: data.domains.find((d) => d.id === t.domainId)?.name }));
+  const mobile = useIsMobile();
+  const [sheet, setSheet] = useState(false);
   const active = view.domainIds.length + view.teamIds.length + view.statuses.length + view.priorities.length + (view.search ? 1 : 0) + (view.time.kind !== "all" ? 1 : 0);
+  const sep = <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />;
+  const clear = active > 0 && (
+    <button className="btn-ghost btn-sm shrink-0 text-ink-500" aria-label="ניקוי מסננים" title="ניקוי מסננים"
+      onClick={() => setView({ ...defaultViewConfig(), showItems: view.showItems, showMilestones: view.showMilestones, showSprints: view.showSprints, density: view.density })}>
+      <RotateCcw size={12} />ניקוי
+    </button>
+  );
+  const filters = <>
+    <MultiSelect label="תחום" options={domainOpts} value={mode === "table" ? view.domainIds.filter((d) => d > 0) : view.domainIds} groups={mode !== "table"}
+      onChange={(v) => setView({ ...view, domainIds: v, teamIds: view.teamIds.filter((t) => { const dom = data.teams.find((x) => x.id === t)?.domainId; return dom !== undefined && (v.length === 0 || v.includes(dom)); }) })} />
+    <MultiSelect label="צוות" options={teamOpts} value={view.teamIds} groups onChange={(v) => setView({ ...view, teamIds: v })} />
+    <MultiSelect label="סטטוס" options={cat.statuses.map((s) => ({ value: s.key, label: s.label }))} value={view.statuses}
+      onChange={(v) => setView({ ...view, statuses: v })}
+      renderOption={(o) => <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border" style={{ background: cat.status(o.value).bg, borderColor: cat.status(o.value).border }} />{o.label}</span>} />
+    <MultiSelect label="תיעדוף" options={cat.priorities.map((p) => ({ value: p.key, label: p.label }))} value={view.priorities}
+      onChange={(v) => setView({ ...view, priorities: v })} width={170} />
+  </>;
+  if (mobile) {
+    // טלפון: חיפוש בשורה, וכל השאר בחלונית "סינון" (מסך מלא)
+    return (
+      <div className="flex items-center gap-1.5 border-b border-ink-200 bg-white px-2 py-2 [&>.search-box]:min-w-0 [&>.search-box]:flex-1" data-testid="filter-bar">
+        <SearchBox data={data} value={view.search} onChange={(q) => setView({ ...view, search: q })} onLocate={onLocate} />
+        <button className={clsx("btn-secondary btn-sm shrink-0", active > 0 && "border-brand-500 bg-brand-50 text-brand-700")} onClick={() => setSheet(true)} data-testid="mobile-filters">
+          <SlidersHorizontal size={13} />סינון{active > 0 ? ` (${active})` : ""}
+        </button>
+        {sheet && (
+          <Dialog open onClose={() => setSheet(false)} title="סינון ותצוגה"
+            footer={<><button className="btn-primary" onClick={() => setSheet(false)}>הצגה</button>{clear}</>}>
+            <div className="flex flex-col items-start gap-2.5 [&>*]:max-w-full" data-testid="mobile-filter-sheet">
+              {filters}
+              <TimeControl value={view.time} onChange={(t) => setView({ ...view, time: t })} />
+              {mode === "gantt" && <LayerToggles view={view} setView={setView} mode={mode} />}
+              <div className="flex items-center gap-1.5">
+                <DisplayOptions view={view} setView={setView} mode={mode} />
+                <SavedViews view={view} setView={setView} data={data} />
+              </div>
+            </div>
+          </Dialog>
+        )}
+      </div>
+    );
+  }
   return (
     // שורה אחת, זהה בגאנט ובטבלה (ההבדל היחיד: כפתורי השכבות בגאנט). כשאין מקום — שדה החיפוש מתכווץ, לא נוספת שורה.
     <div className="flex flex-nowrap items-center gap-1.5 border-b border-ink-200 bg-white px-4 py-2 [&>*]:shrink-0 [&>.search-box]:shrink" data-testid="filter-bar">
       <SearchBox data={data} value={view.search} onChange={(q) => setView({ ...view, search: q })} onLocate={onLocate} />
-      <MultiSelect label="תחום" options={domainOpts} value={mode === "table" ? view.domainIds.filter((d) => d > 0) : view.domainIds} groups={mode !== "table"}
-        onChange={(v) => setView({ ...view, domainIds: v, teamIds: view.teamIds.filter((t) => { const dom = data.teams.find((x) => x.id === t)?.domainId; return dom !== undefined && (v.length === 0 || v.includes(dom)); }) })} />
-      <MultiSelect label="צוות" options={teamOpts} value={view.teamIds} groups onChange={(v) => setView({ ...view, teamIds: v })} />
-      <MultiSelect label="סטטוס" options={cat.statuses.map((s) => ({ value: s.key, label: s.label }))} value={view.statuses}
-        onChange={(v) => setView({ ...view, statuses: v })}
-        renderOption={(o) => <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border" style={{ background: cat.status(o.value).bg, borderColor: cat.status(o.value).border }} />{o.label}</span>} />
-      <MultiSelect label="תיעדוף" options={cat.priorities.map((p) => ({ value: p.key, label: p.label }))} value={view.priorities}
-        onChange={(v) => setView({ ...view, priorities: v })} width={170} />
-      <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
+      {filters}
+      {sep}
       <TimeControl value={view.time} onChange={(t) => setView({ ...view, time: t })} />
       {mode === "gantt" && <>
-        <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
+        {sep}
         <LayerToggles view={view} setView={setView} mode={mode} />
       </>}
-      {active > 0 && (
-        <button className="btn-ghost btn-sm shrink-0 text-ink-500" aria-label="ניקוי מסננים" title="ניקוי מסננים"
-          onClick={() => setView({ ...defaultViewConfig(), showItems: view.showItems, showMilestones: view.showMilestones, showSprints: view.showSprints, density: view.density })}>
-          <RotateCcw size={12} />ניקוי
-        </button>
-      )}
+      {clear}
       <div className="mr-auto flex shrink-0 items-center gap-1.5">
         <DisplayOptions view={view} setView={setView} mode={mode} />
         <SavedViews view={view} setView={setView} data={data} />
@@ -84,7 +118,8 @@ function SearchBox({ data, value, onChange, onLocate }: {
     const teamName = new Map(data.teams.map((t) => [t.id, t]));
     const domName = new Map(data.domains.map((d) => [d.id, d.name]));
     return data.items
-      .filter((i) => i.name.toLowerCase().includes(q) || i.notes.toLowerCase().includes(q) || String(i.id) === q)
+      .filter((i) => i.name.toLowerCase().includes(q) || i.notes.toLowerCase().includes(q) || String(i.id) === q
+        || depsOf(i).some((d) => d.text.toLowerCase().includes(q) || d.on.toLowerCase().includes(q)))
       .sort((a, b) => Number(!a.name.toLowerCase().includes(q)) - Number(!b.name.toLowerCase().includes(q)) || a.startWeek.localeCompare(b.startWeek))
       .slice(0, 12)
       .map((i) => {
@@ -104,7 +139,7 @@ function SearchBox({ data, value, onChange, onLocate }: {
   return (
     <div ref={ref} className="search-box relative min-w-[120px]">
       <Search size={14} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ink-400" />
-      <input className="input h-7 w-[200px] max-w-full pr-7 text-[12.5px]" placeholder="חיפוש תכולה (שם, הערות, ID)…" value={value}
+      <input className="input h-7 w-full pr-7 text-[12.5px] md:w-[200px]" placeholder="חיפוש תכולה (שם, הערות, ID)…" value={value}
         onChange={(e) => { onChange(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} data-testid="search"
         onBlur={() => setTimeout(() => setOpen(false), 120) /* יציאה מהשדה סוגרת את הרשימה — שלא תסתיר כפתורים */}
         onKeyDown={(e) => {

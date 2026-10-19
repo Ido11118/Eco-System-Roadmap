@@ -1,7 +1,7 @@
 import "server-only";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { domains, milestones, sprints, teams, workItems, workRows } from "@/db/schema";
+import { backlogItems, domains, milestones, sprints, teams, workItems, workRows } from "@/db/schema";
 import type { Me } from "@/lib/types";
 import { CROSS_LABEL, placeTeamItems, type ImportPayload, type ImportResult } from "@/lib/aiImport";
 import { ApiError } from "./errors";
@@ -17,7 +17,7 @@ const isSuper = (me: Me) => me.role === "SUPER";
  */
 export async function importPlan(me: Me, p: ImportPayload): Promise<ImportResult> {
   const cat = await loadCatalog();
-  const [ts, ds] = await Promise.all([db.select().from(teams), db.select().from(domains)]);
+  const [ts, ds] = await Promise.all([db.select().from(teams).where(isNull(teams.archivedAt)), db.select().from(domains)]);
   const teamDomain = new Map(ts.map((t) => [t.id, t.domainId]));
   const domainName = new Map(ds.map((d) => [d.id, d.name]));
   const canTeam = (teamId: number) => teamDomain.has(teamId) && (isSuper(me) || me.domainIds.includes(teamDomain.get(teamId)!));
@@ -43,6 +43,11 @@ export async function importPlan(me: Me, p: ImportPayload): Promise<ImportResult
     else team(m.name, m.teamId, "אבני דרך רוחביות");
   }
   for (const s of p.sprints) domain(s.name, s.domainId);
+  for (const b of p.backlog) { // באקלוג: הרשאה לתחום; צוות (לא חובה) חייב להיות מאותו תחום
+    domain(b.name, b.domainId);
+    if (b.teamId !== null && teamDomain.get(b.teamId) !== b.domainId) errors.push(`"${b.name}": הצוות לא קיים או לא שייך לתחום`);
+    if (b.priority && !cat.priorities.some((x) => x.key === b.priority)) errors.push(`"${b.name}": תיעדוף לא קיים`);
+  }
   if (errors.length) throw new ApiError(403, `לא ניתן לייבא: ${errors.slice(0, 5).join(" · ")}${errors.length > 5 ? ` (ועוד ${errors.length - 5})` : ""}`, { errors });
 
   return db.transaction(async (tx) => {
@@ -57,7 +62,7 @@ export async function importPlan(me: Me, p: ImportPayload): Promise<ImportResult
       : [];
     const places = placeTeamItems(rows, live, teamItems);
 
-    const out: ImportResult = { itemIds: [], milestoneIds: [], sprintIds: [], rowIds: [] };
+    const out: ImportResult = { itemIds: [], milestoneIds: [], sprintIds: [], rowIds: [], backlogIds: [] };
     const newRows = new Map<string, number>();
     const rowFor = async (teamId: number, k: number) => {
       const key = `${teamId}:${k}`;
@@ -98,7 +103,14 @@ export async function importPlan(me: Me, p: ImportPayload): Promise<ImportResult
       await audit(tx, me.id, "sprint", r.id, "create", { name: r.name, import: "ai" }, `נוצר ספרינט "${r.name}" (ייבוא בעזרת AI)`);
       out.sprintIds.push(r.id);
     }
-    await audit(tx, me.id, "import", "ai", "create", out, `ייבוא בעזרת AI: ${out.itemIds.length} תכולות, ${out.milestoneIds.length} אבני דרך, ${out.sprintIds.length} ספרינטים`);
+    for (const b of p.backlog) {
+      const [r] = await tx.insert(backlogItems).values({
+        name: b.name, domainId: b.domainId, teamId: b.teamId, priority: b.priority ?? cat.defaultPriority, notes: b.notes, createdById: me.id, updatedById: me.id,
+      }).returning();
+      await audit(tx, me.id, "backlog", r.id, "create", { name: r.name, domainId: r.domainId, teamId: r.teamId, import: "ai" }, `נוסף לבאקלוג "${r.name}" (ייבוא בעזרת AI)`);
+      out.backlogIds.push(r.id);
+    }
+    await audit(tx, me.id, "import", "ai", "create", out, `ייבוא בעזרת AI: ${out.itemIds.length} תכולות, ${out.milestoneIds.length} אבני דרך, ${out.sprintIds.length} ספרינטים, ${out.backlogIds.length} פריטי באקלוג`);
     return out;
   });
 }
@@ -117,6 +129,9 @@ export async function undoImport(me: Me, ids: ImportResult) {
       .where(and(inArray(milestones.id, pickIds(ids.milestoneIds)), eq(milestones.createdById, me.id), eq(milestones.version, 1), isNull(milestones.deletedAt))).returning({ id: milestones.id });
     const sp = await tx.update(sprints).set({ deletedAt: now })
       .where(and(inArray(sprints.id, pickIds(ids.sprintIds)), eq(sprints.createdById, me.id), eq(sprints.version, 1), isNull(sprints.deletedAt))).returning({ id: sprints.id });
+    // באקלוג: מחיקה (אין מחיקה רכה) רק של מה שלא נערך ולא הועבר לגאנט מאז
+    const bl = await tx.delete(backlogItems)
+      .where(and(inArray(backlogItems.id, pickIds(ids.backlogIds ?? [])), eq(backlogItems.createdById, me.id), eq(backlogItems.version, 1))).returning({ id: backlogItems.id });
     let rowsDeleted = 0;
     for (const rowId of ids.rowIds) {
       const [any] = await tx.select({ id: workItems.id }).from(workItems).where(and(eq(workItems.rowId, rowId), isNull(workItems.deletedAt))).limit(1);
@@ -125,9 +140,9 @@ export async function undoImport(me: Me, ids: ImportResult) {
         .where(and(eq(workRows.id, rowId), eq(workRows.createdById, me.id), isNull(workRows.deletedAt))).returning({ id: workRows.id });
       rowsDeleted += r.length;
     }
-    const removed = items.length + ms.length + sp.length;
-    const skipped = ids.itemIds.length + ids.milestoneIds.length + ids.sprintIds.length - removed;
-    await audit(tx, me.id, "import", "ai", "delete", { itemIds: items.map((x) => x.id), milestoneIds: ms.map((x) => x.id), sprintIds: sp.map((x) => x.id), rowsDeleted },
+    const removed = items.length + ms.length + sp.length + bl.length;
+    const skipped = ids.itemIds.length + ids.milestoneIds.length + ids.sprintIds.length + (ids.backlogIds ?? []).length - removed;
+    await audit(tx, me.id, "import", "ai", "delete", { itemIds: items.map((x) => x.id), milestoneIds: ms.map((x) => x.id), sprintIds: sp.map((x) => x.id), backlogIds: bl.map((x) => x.id), rowsDeleted },
       `בוטל ייבוא בעזרת AI (${removed} פריטים${skipped ? `, ${skipped} נערכו בינתיים ונשארו` : ""})`);
     return { removed, skipped };
   });

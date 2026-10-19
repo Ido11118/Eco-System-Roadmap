@@ -1,6 +1,7 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { isTouchOnly } from "./useMobile";
 
 // Tooltip גלובלי אחד שעוקב אחרי העכבר — חסכוני גם בגאנט עם מאות קוביות
 // delay: השהיה (מ"ש) לפני ההופעה — כדי שמעבר עכבר מהיר על פני הגאנט לא יקפיץ חלונות
@@ -19,6 +20,7 @@ export function TooltipProvider({ children }: { children: React.ReactNode }) {
   const pending = useRef<TipState | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const show = useCallback<Ctx["show"]>((content, e, opts) => {
+    if (isTouchOnly()) return; // מסך מגע: אין ריחוף — הקשה פותחת תקציר, ו-Tooltip היה קופץ באיחור מעליו
     const r = opts?.anchor?.getBoundingClientRect();
     const next: TipState = { content, x: e.clientX, y: e.clientY, rect: r ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom } : undefined, top: opts?.placement === "top" };
     if (visible.current || !opts?.delay) { visible.current = true; setTip(next); return; }

@@ -2,7 +2,7 @@
 // בדיקות קצה-לקצה: 25 התרחישים המחייבים (סעיף 22 באפיון) ובדיקות קשיחות נוספות (מקביליות, קלט זדוני, אבטחה).
 // הרצה מול שרת רץ: BASE_URL=http://localhost:3000 SUPERUSER_EMAIL=... SUPERUSER_PASSWORD=... npm run test:e2e
 // מומלץ להריץ מול בסיס נתונים ייעודי לבדיקות — הבדיקות יוצרות משתמשים ותכולות.
-import { chromium, request, type APIRequestContext, type Browser, type Page } from "playwright";
+import { chromium, devices, request, type APIRequestContext, type Browser, type Page } from "playwright";
 import { addWeeks, currentWeekIL, weekNumber } from "../../src/lib/weeks";
 import type { ItemDTO, PlanData, RowDTO, SprintDTO } from "../../src/lib/types";
 
@@ -883,7 +883,7 @@ async function main() {
   });
 
   // 44 --------------------------------------------------------------
-  await scenario(44, "תכולות: בלי מידע רוחבי, ID אחרון, מקטעים מתכווצים והסתרה בקליק ימני; סינון לפי הרשאות; חשיפה אחרי הוספה; הקלדה פותחת תכולה", async () => {
+  await scenario(44, "תכולות: בלי מידע רוחבי, בלי עמודת ID, מקטעים מתכווצים והסתרה בקליק ימני; סינון לפי הרשאות; חשיפה אחרי הוספה; הקלדה פותחת תכולה", async () => {
     // סינון ברירת מחדל לפי הרשאות: משתמש חדש עם עריכה לאג"ם רואה רק את אג"ם
     const E = await ctx(); const uE = `e-${RUN}@test.local`;
     await json(E, "POST", "/api/auth/register", { fullName: "משתמש ה", email: uE, password: PW, domainIds: [AGAM], requestCross: false });
@@ -919,19 +919,18 @@ async function main() {
     await pAdmin.getByText(/הסתרת התחום/).click();
     await pAdmin.waitForTimeout(300);
     assert(!(await pAdmin.locator(`[data-testid=gantt-body] [data-domain="${ESH}"]`).count()), "domain not hidden");
-    // טבלה: בלי מידע רוחבי; ID העמודה האחרונה (השמאלית)
+    // טבלה: בלי מידע רוחבי; בלי עמודת ID (המזהה מאחורי הקלעים)
     const holiday = (await json<PlanData>(admin, "GET", "/api/plan")).body.items.find((i) => i.teamId === null)!;
     await pAdmin.goto(`${BASE}/plan?view=table`); await pAdmin.waitForSelector("[data-testid=table-view]");
     assert(!(await pAdmin.locator(`[data-item-row="${holiday.id}"]`).count()), "cross item shown in table");
     const heads = (await pAdmin.locator("thead th").allInnerTexts()).map((h) => h.trim());
-    assert(heads[heads.length - 1] === "ID", `last column is ${heads[heads.length - 1]}`);
+    assert(!heads.includes("ID"), `ID column still shown: ${heads.join(",")}`);
     // כל עמודה מתאימה לכותרת שלה (הכותרות והערכים באותו סדר)
     const anyItem = (await json<PlanData>(admin, "GET", "/api/plan")).body.items.find((i) => i.teamId !== null)!;
     const rowEl = pAdmin.locator(`[data-item-row="${anyItem.id}"]`);
     await rowEl.waitFor();
     const cells = rowEl.locator("td");
     assert((await cells.count()) === heads.length, `row has ${await cells.count()} cells, header ${heads.length}`);
-    assert((await cells.nth(heads.indexOf("ID")).innerText()).trim() === String(anyItem.id), "ID column value mismatch");
     assert((await cells.nth(heads.indexOf("שם התכולה")).innerText()).includes(anyItem.name.slice(0, 5)), "name column value mismatch");
     assert(await cells.nth(heads.indexOf("סטטוס")).locator(`[data-testid=status-${anyItem.id}]`).count() === 1, "status column mismatch");
     // מקטע מתכווץ בלחיצה, נשמר אחרי רענון, ונפתח שוב
@@ -1322,6 +1321,282 @@ async function main() {
     await pa.click("[data-testid=marker-edit]");
     assert((await pa.inputValue("[data-testid=ms-scope]")) === `d:${AGAM}`, "dialog scope is not the domain");
     await pa.keyboard.press("Escape");
+  });
+
+  await scenario(53, "מבנה הגאנט: מנהל מוסיף/משנה שם/מסיר צוות; הרשאות לפי תחום חלות מיד; הסרה עם אישור והצגת תכולות", async () => {
+    const PLATFORM = plan0.domains.find((d) => d.key === "platform")!.id;
+    // רק מנהל המערכת
+    assert((await json(A, "POST", "/api/admin/teams", { domainId: AGAM, name: "x" })).status === 403, "regular user created team");
+    assert((await json(A, "GET", "/api/admin/structure")).status === 403, "regular user read structure");
+    // הוספת צוות לאג"ם: מופיע בתוכנית עם שתי שורות, ו-A (הרשאה לאג"ם) יכול לערוך בו מיד
+    const nt = await json<{ id: number; name: string }>(admin, "POST", "/api/admin/teams", { domainId: AGAM, name: `צוות-${RUN}` });
+    assert(nt.status === 200, `create team: ${nt.status} ${JSON.stringify(nt.body)}`);
+    assert((await json(admin, "POST", "/api/admin/teams", { domainId: AGAM, name: ` צוות-${RUN} ` })).status === 409, "duplicate team name accepted");
+    let plan = (await json<PlanData>(A, "GET", "/api/plan")).body;
+    const rows = plan.rows.filter((r) => r.teamId === nt.body.id);
+    assert(plan.teams.some((t) => t.id === nt.body.id && t.domainId === AGAM) && rows.length === 2, "new team not in plan with 2 rows");
+    const it = await json<{ id: number }>(A, "POST", "/api/items", { rowId: rows[0].id, name: `בצוות-חדש-${RUN}`, startWeek: cw, endWeek: cw });
+    assert(it.status === 200, `user with domain permission cannot edit new team: ${it.status}`);
+    // שינוי שם
+    assert((await json(admin, "PATCH", `/api/admin/teams/${nt.body.id}`, { name: `שם-חדש-${RUN}` })).status === 200, "rename failed");
+    plan = (await json<PlanData>(A, "GET", "/api/plan")).body;
+    assert(plan.teams.find((t) => t.id === nt.body.id)?.name === `שם-חדש-${RUN}`, "rename not reflected");
+    // תחום עם צוות יחיד מתפצל כשמוסיפים לו צוות, וחוזר כשמסירים
+    const pt = await json<{ id: number }>(admin, "POST", "/api/admin/teams", { domainId: PLATFORM, name: `פלט-${RUN}` });
+    assert((await json<PlanData>(A, "GET", "/api/plan")).body.domains.find((d) => d.id === PLATFORM)?.isSingleTeam === false, "single-team domain not split");
+    assert((await json(admin, "DELETE", `/api/admin/teams/${pt.body.id}`)).status === 200, "remove empty team failed");
+    assert((await json<PlanData>(A, "GET", "/api/plan")).body.domains.find((d) => d.id === PLATFORM)?.isSingleTeam === true, "single-team domain not restored");
+    // הצוות האחרון בתחום — לא ניתן להסרה
+    const platTeam = plan.teams.find((t) => t.domainId === PLATFORM)!;
+    assert((await json(admin, "DELETE", `/api/admin/teams/${platTeam.id}`)).status === 400, "last team in domain removed");
+    // ממשק: הסרת צוות עם תוכן — אישור + הצגת התכולות
+    await pAdmin.goto(`${BASE}/admin`); await pAdmin.click("[data-testid=admin-tab-structure]");
+    await pAdmin.waitForSelector(`[data-testid=structure-team-${nt.body.id}]`);
+    assert((await pAdmin.innerText(`[data-testid=structure-team-${nt.body.id}]`)).includes("1 תכולות"), "item count not shown");
+    await pAdmin.click(`[data-testid=remove-team-${nt.body.id}]`);
+    await pAdmin.waitForSelector("[data-testid=remove-team-dialog]");
+    await pAdmin.click("[data-testid=show-team-contents]");
+    await pAdmin.waitForSelector(`[data-testid=team-contents] >> text=בצוות-חדש-${RUN}`);
+    await pAdmin.click("[data-testid=confirm-remove-team]");
+    await pAdmin.waitForSelector(`[data-testid=structure-team-${nt.body.id}]`, { state: "detached" });
+    plan = (await json<PlanData>(A, "GET", "/api/plan")).body;
+    assert(!plan.teams.some((t) => t.id === nt.body.id) && !plan.items.some((i) => i.id === it.body.id) && !plan.rows.some((r) => r.teamId === nt.body.id), "removed team or its content still in plan");
+    assert((await json(A, "POST", "/api/items", { rowId: rows[1].id, name: "x", startWeek: cw, endWeek: cw })).status >= 400, "item created in removed team");
+    assert((await json(admin, "POST", `/api/items/${it.body.id}/restore`)).status >= 400, "item of removed team restored");
+  });
+
+  // 54 --------------------------------------------------------------
+  await scenario(54, "מצב צפייה בלבד: אין הוספה/עריכה בגאנט ובטבלה, נשמר אחרי רענון, וחוזרים לעריכה בלחיצה", async () => {
+    const r = await newRow(A, T_AZ1);
+    const it = (await json<ItemDTO>(A, "POST", "/api/items", { rowId: r.id, name: `צפייה-${RUN}`, startWeek: addWeeks(cw, 3), endWeek: addWeeks(cw, 4) })).body;
+    await pa.goto(`${BASE}/plan?view=table`); await pa.waitForSelector(`[data-testid=status-${it.id}]`);
+    assert(await pa.locator(`[data-testid=status-${it.id}]`).isEnabled(), "status not editable before view-only");
+    await pa.click("[data-testid=view-only-toggle]");
+    await pa.waitForSelector("[data-testid=view-only-banner]");
+    assert(await pa.locator(`[data-testid=status-${it.id}]`).isDisabled(), "status editable in view-only");
+    assert(!(await pa.locator("[data-testid=add-fab]").count()), "add button shown in view-only");
+    assert(!(await pa.locator("[data-testid=deleted-items]").count()), "deleted-items shown in view-only");
+    // נשמר אחרי רענון; בגאנט: לחיצה כפולה על תא לא פותחת הוספה, וחלונית התכולה לקריאה בלבד
+    await pa.goto(`${BASE}/plan?view=gantt`);
+    await pa.waitForSelector("[data-testid=view-only-banner]");
+    await pa.waitForSelector(`[data-bar="${it.id}"]`);
+    const lane = pa.locator(`[data-lane-row="${r.id}"]`).first();
+    await lane.evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
+    const lb = (await lane.boundingBox())!, wb = (await pa.locator(`[data-week="${addWeeks(cw, 8)}"]`).boundingBox())!;
+    await pa.mouse.dblclick(wb.x + wb.width / 2, lb.y + lb.height / 2);
+    await pa.waitForTimeout(600);
+    assert(!(await pa.locator("[data-testid=quick-create]").count()) && !(await pa.locator("[data-testid=sel-plus]").count()), "add possible in view-only");
+    await pa.locator(`[data-bar="${it.id}"]`).dblclick();
+    await pa.waitForSelector("[data-testid=item-panel]");
+    assert(!(await pa.locator("[data-testid=panel-name]").count()), "name editable in view-only");
+    assert((await pa.locator("[data-testid=item-panel]").innerText()).includes("מצב צפייה בלבד פעיל"), "panel lacks view-only note");
+    await pa.keyboard.press("Escape");
+    // חזרה לעריכה
+    await pa.click("[data-testid=view-only-exit]");
+    await pa.waitForSelector("[data-testid=view-only-banner]", { state: "detached" });
+    await pa.waitForSelector("[data-testid=add-fab]");
+    assert(!(await pa.locator("[data-testid=view-only-toggle]").getAttribute("aria-pressed") === "true"), "toggle still pressed");
+  });
+
+  // 55 --------------------------------------------------------------
+  await scenario(55, "תלויות לתכולה (הוספה, סימון בגאנט ובטבלה, טופלה, הרשאות, היסטוריה); שם הקובייה נשאר גלוי בגלילה; רוחב עמודות אישי; צוות אלביט", async () => {
+    assert(plan0.teams.filter((t) => t.name === "אלביט" && t.domainId === AGAM).length === 1, "team אלביט missing in אג\"ם");
+    const r = await newRow(A, T_AZ1);
+    const it = (await json<ItemDTO>(A, "POST", "/api/items", { rowId: r.id, name: `ארוכה-עם-תלות-${RUN}`, startWeek: cw, endWeek: addWeeks(cw, 24) })).body;
+    // הוספת תלות מחלונית הפרטים
+    await pa.goto(`${BASE}/plan?view=gantt`);
+    const bar = pa.locator(`[data-bar="${it.id}"]`);
+    await bar.waitFor();
+    await bar.evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
+    await bar.dblclick();
+    await pa.waitForSelector("[data-testid=deps-editor]");
+    await pa.fill("[data-testid=dep-text]", "API מצוות ניטור");
+    await pa.fill("[data-testid=dep-on]", "ניטור");
+    await pa.click("[data-testid=dep-add]");
+    await pa.waitForTimeout(800);
+    let cur = (await json<PlanData>(A, "GET", "/api/plan")).body.items.find((i) => i.id === it.id)!;
+    assert(cur.dependencies?.length === 1 && cur.dependencies[0].on === "ניטור" && !cur.dependencies[0].done, `deps after add: ${JSON.stringify(cur.dependencies)}`);
+    await pa.keyboard.press("Escape");
+    await pa.waitForSelector(`[data-bar="${it.id}"] [data-dep-badge="1"]`);
+    // בטבלה: עמודת תלויות
+    await pa.goto(`${BASE}/plan?view=table`);
+    await pa.waitForSelector(`[data-testid=deps-${it.id}]`);
+    assert((await pa.innerText(`[data-testid=deps-${it.id}]`)).includes("API מצוות ניטור"), "deps column missing text");
+    // סימון "טופלה" → הסימון בגאנט נעלם
+    await pa.click(`[data-testid=deps-${it.id}]`);
+    await pa.waitForSelector("[data-testid=deps-editor]");
+    await pa.click(`[data-testid=dep-done-${cur.dependencies![0].id}]`);
+    await pa.waitForTimeout(800);
+    cur = (await json<PlanData>(A, "GET", "/api/plan")).body.items.find((i) => i.id === it.id)!;
+    assert(cur.dependencies?.[0].done === true, "dependency not marked done");
+    const hist = (await json<{ summary: string }[]>(A, "GET", `/api/history?type=item&id=${it.id}`)).body.map((h) => h.summary).join(" | ");
+    assert(hist.includes("נוספה תלות") && hist.includes("סומנה כטופלה"), `history: ${hist}`);
+    await pa.keyboard.press("Escape");
+    // הרשאות: אין עריכת תלויות בתחום ללא הרשאה
+    const eshRow = (await json<RowDTO>(admin, "POST", "/api/rows", { teamId: T_ESH })).body;
+    const z = (await json<ItemDTO>(admin, "POST", "/api/items", { rowId: eshRow.id, name: `תלות-אש-${RUN}`, startWeek: addWeeks(cw, 30), endWeek: addWeeks(cw, 30) })).body;
+    assert((await json(A, "PATCH", `/api/items/${z.id}`, { version: z.version, patch: { dependencies: [{ id: "x1", text: "נסיון", on: "", done: false }] } })).status === 403, "dependency edit without permission");
+    // שם הקובייה נשאר גלוי כשתחילתה גלולה מתחת לעמודות התחום/הצוות
+    await pa.goto(`${BASE}/plan?view=gantt`);
+    await bar.waitFor();
+    await bar.evaluate((el) => el.scrollIntoView({ block: "center", inline: "start" }));
+    await pa.locator("[data-testid=gantt-scroll]").evaluate((el, dx) => { el.scrollLeft -= dx; }, 10 * 40);
+    await pa.waitForTimeout(300);
+    const label = (await pa.locator(`[data-team-label="${T_AZ1}"]`).boundingBox())!;
+    const b = (await bar.boundingBox())!;
+    const nameBox = (await bar.locator("span.truncate").boundingBox())!;
+    assert(b.x + b.width > label.x + 5, `bar start not under the label columns (bar ${b.x + b.width}, labels ${label.x})`);
+    assert(nameBox.x + nameBox.width <= label.x + 2 && nameBox.x >= b.x - 1, `name hidden while scrolling: name ${JSON.stringify(nameBox)} labels.x ${label.x}`);
+    // רוחב עמודת הצוות — אישי ונשמר
+    const w0 = label.width;
+    const h = (await pa.locator("[data-testid=resize-team]").boundingBox())!;
+    const hx = h.x + h.width / 2;
+    await pa.mouse.move(hx, h.y + h.height / 2); await pa.mouse.down();
+    await pa.mouse.move(hx - 30, h.y + h.height / 2, { steps: 4 }); await pa.mouse.move(hx - 60, h.y + h.height / 2, { steps: 4 }); await pa.mouse.up();
+    await pa.waitForTimeout(600);
+    const w1 = (await pa.locator(`[data-team-label="${T_AZ1}"]`).boundingBox())!.width;
+    assert(Math.abs(w1 - w0 - 60) < 4, `team column ${w0} → ${w1}`);
+    await pa.reload(); await pa.waitForSelector(`[data-team-label="${T_AZ1}"]`);
+    const w2 = (await pa.locator(`[data-team-label="${T_AZ1}"]`).boundingBox())!.width;
+    assert(Math.abs(w2 - w1) < 2, `width not saved: ${w1} → ${w2}`);
+    const otherW = await (async () => { await pAdmin.goto(`${BASE}/plan?view=gantt`); await pAdmin.waitForSelector(`[data-team-label="${T_AZ1}"]`); return (await pAdmin.locator(`[data-team-label="${T_AZ1}"]`).boundingBox())!.width; })();
+    assert(Math.abs(otherW - w0) < 2, `width leaked to another user (${otherW})`);
+    await pa.dblclick("[data-testid=resize-team]");
+    await pa.waitForTimeout(400);
+    assert(Math.abs((await pa.locator(`[data-team-label="${T_AZ1}"]`).boundingBox())!.width - w0) < 2, "double-click did not reset width");
+  });
+
+  await scenario(56, "טלפון (iPhone): תפריט ☰ במקום סרגל צד, בלי גלילה הצידה, הקשה על תכולה פותחת תקציר, כרטיסים בתכולות, חלונית סינון", async () => {
+    const mctx = await browser.newContext({ ...devices["iPhone 13"], locale: "he-IL", timezoneId: "Asia/Jerusalem" });
+    const m = await mctx.newPage();
+    try {
+      await m.goto(`${BASE}/login`); await m.fill("#email", uA.email); await m.fill("#password", PW);
+      await m.click("form button.btn-primary"); await m.waitForURL(/\/plan/, { timeout: 60000 });
+      await m.goto(`${BASE}/plan?view=gantt`); await m.waitForSelector("[data-testid=gantt-view]");
+      assert(!(await m.locator("[data-testid=sidebar]").isVisible()), "sidebar visible on phone");
+      assert(await m.locator("[data-testid=mobile-menu]").isVisible(), "no hamburger menu on phone");
+      assert((await m.evaluate(() => document.documentElement.scrollWidth)) <= 390, "page scrolls sideways on phone");
+      const bar = m.locator("[data-bar]").first();
+      await bar.scrollIntoViewIfNeeded(); await bar.tap();
+      await m.waitForSelector("[data-testid=item-summary]");
+      await m.tap("[data-testid=summary-open]"); await m.waitForSelector("[data-testid=item-panel]");
+      await m.keyboard.press("Escape");
+      await m.tap("[data-testid=mobile-menu]"); await m.tap("[data-testid=mode-table]");
+      await m.waitForSelector("[data-testid=mobile-item-list] [data-item-card]");
+      assert(!(await m.locator("[data-testid=mobile-nav]").count()), "nav drawer stayed open after navigation");
+      await m.tap("[data-testid=mobile-filters]"); await m.waitForSelector("[data-testid=mobile-filter-sheet]");
+    } finally { await mctx.close(); }
+  });
+
+  // 57 --------------------------------------------------------------
+  await scenario(57, "באקלוג: גלוי רק לעורכי התחום; הוספה; העברה לגאנט מחלון (שבועות) ומבחירה על הגאנט; הפריט יוצא מהבאקלוג", async () => {
+    type BL = { id: number; name: string; teamId: number; priority: string; version: number };
+    // הרשאות: משתמש עם עריכה ל"אש" בלבד לא רואה ולא נוגע בבאקלוג של אג"ם
+    const G = await ctx(); const uG = `g-${RUN}@test.local`;
+    await json(G, "POST", "/api/auth/register", { fullName: "משתמש ז", email: uG, password: PW, domainIds: [ESH], requestCross: false });
+    await json(admin, "POST", `/api/admin/users/${await userId(uG)}`, { action: "approve", domainIds: [ESH], canEditCross: false });
+    await login(G, uG, PW);
+    const secret = (await json<BL>(A, "POST", "/api/backlog", { name: `סודי-${RUN}`, teamId: T_AZ1 })).body;
+    assert(secret.id > 0, "create backlog via API failed");
+    assert(!(await json<BL[]>(G, "GET", "/api/backlog")).body.some((b) => b.id === secret.id), "backlog leaked to another domain");
+    assert((await json(G, "PATCH", `/api/backlog/${secret.id}`, { version: secret.version, patch: { name: "x" } })).status === 404, "other domain can edit backlog");
+    assert((await json(G, "POST", "/api/backlog", { name: "x", teamId: T_AZ1 })).status === 403, "other domain can add to backlog");
+    assert((await json<BL[]>(admin, "GET", "/api/backlog")).body.some((b) => b.id === secret.id), "admin does not see backlog");
+    // תחום חובה, צוות לא חובה; בחירת צוות מתחום אחר מחליפה את התחום; החלפת תחום מנקה צוות שלא שייך אליו
+    assert((await json(A, "POST", "/api/backlog", { name: "בלי תחום" })).status === 400, "backlog item without domain accepted");
+    const noTeam = (await json<BL & { domainId: number }>(A, "POST", "/api/backlog", { name: `ללא-צוות-${RUN}`, domainId: AGAM })).body;
+    assert(noTeam.teamId === null && noTeam.domainId === AGAM, `no-team item: ${JSON.stringify(noTeam)}`);
+    const tmp = (await json<BL & { domainId: number }>(admin, "POST", "/api/backlog", { name: `העברת-תחום-${RUN}`, domainId: AGAM })).body;
+    const t1 = (await json<BL & { domainId: number }>(admin, "PATCH", `/api/backlog/${tmp.id}`, { version: tmp.version, patch: { teamId: T_ESH } })).body;
+    assert(t1.teamId === T_ESH && t1.domainId === ESH, `team from another domain did not switch domain: ${JSON.stringify(t1)}`);
+    const t2 = (await json<BL & { domainId: number }>(admin, "PATCH", `/api/backlog/${tmp.id}`, { version: t1.version, patch: { domainId: AGAM } })).body;
+    assert(t2.teamId === null && t2.domainId === AGAM, `domain change kept a foreign team: ${JSON.stringify(t2)}`);
+    assert((await json(A, "PATCH", `/api/backlog/${noTeam.id}`, { version: noTeam.version, patch: { teamId: T_ESH } })).status === 403, "moved to a domain without permission");
+    await json(admin, "DELETE", `/api/backlog/${tmp.id}`);
+    // ייבוא בעזרת AI לבאקלוג: נכנס לבאקלוג, נאכפות הרשאות, וניתן לבטל
+    const imp = await json<{ backlogIds: number[]; itemIds: number[] }>(A, "POST", "/api/import", { items: [], milestones: [], sprints: [], backlog: [{ name: `AI-באקלוג-${RUN}`, domainId: AGAM, teamId: null, notes: "" }] });
+    assert(imp.status === 200 && imp.body.backlogIds.length === 1 && imp.body.itemIds.length === 0, `AI backlog import: ${imp.status} ${JSON.stringify(imp.body)}`);
+    assert((await json<BL[]>(A, "GET", "/api/backlog")).body.some((b) => b.id === imp.body.backlogIds[0]), "AI backlog item not in backlog");
+    assert((await json(G, "POST", "/api/import", { items: [], milestones: [], sprints: [], backlog: [{ name: "x", domainId: AGAM, teamId: null, notes: "" }] })).status === 403, "AI import to backlog of another domain");
+    assert((await json(A, "POST", "/api/import", { items: [], milestones: [], sprints: [], backlog: [{ name: "x", domainId: AGAM, teamId: T_ESH, notes: "" }] })).status === 403, "AI backlog team from another domain accepted");
+    const und = await json<{ removed: number }>(A, "POST", "/api/import/undo", { itemIds: [], milestoneIds: [], sprintIds: [], rowIds: [], backlogIds: imp.body.backlogIds });
+    assert(und.body.removed === 1 && !(await json<BL[]>(A, "GET", "/api/backlog")).body.some((b) => b.id === imp.body.backlogIds[0]), "AI backlog import not undone");
+    // ממשק: סרגל צד → באקלוג אישי, הסבר, הוספה
+    await pa.goto(`${BASE}/plan?view=gantt`);
+    await pa.click("[data-testid=mode-backlog]");
+    await pa.waitForSelector("[data-testid=backlog-view]");
+    assert((await pa.innerText("[data-testid=backlog-note]")).includes("רשימה זו משותפת רק עם מי שיש לו הרשאת עריכה לתחום שלך"), "explanation text missing");
+    // שורת "+ הוספת פריט" בתחתית: ממלאים בשורה, Enter שומר ונפתחת שורה ריקה נוספת
+    await pa.click("[data-testid=backlog-add-row]");
+    await pa.selectOption("[data-testid=backlog-new-team]", String(T_AZ1));
+    await pa.fill("[data-testid=backlog-new-name]", `מהבאקלוג-${RUN}`);
+    await pa.fill("[data-testid=backlog-new-notes]", "הערה מהשורה");
+    await pa.press("[data-testid=backlog-new-name]", "Enter");
+    await pa.waitForTimeout(700);
+    assert((await pa.inputValue("[data-testid=backlog-new-name]")) === "", "new row not cleared for the next item");
+    await pa.keyboard.press("Escape");
+    await pa.waitForSelector("[data-testid=backlog-new-row]", { state: "detached" });
+    const mine = (await json<BL[]>(A, "GET", "/api/backlog")).body.find((b) => b.name === `מהבאקלוג-${RUN}`)!;
+    assert(mine && mine.teamId === T_AZ1 && (mine as BL & { notes: string }).notes === "הערה מהשורה", "item not added from UI");
+    await pa.waitForSelector(`[data-backlog-row="${mine.id}"]`);
+    // שינוי תיעדוף בטבלה נשמר ועובר עם הפריט לגאנט
+    const prio = (await json<{ priorities: { key: string; isDefault: boolean; archived: boolean }[] }>(admin, "GET", "/api/catalog")).body.priorities.find((p) => !p.isDefault && !p.archived)!.key;
+    await pa.locator(`[data-backlog-row="${mine.id}"] td`).nth(3).locator("select").selectOption(prio); // עמודת התיעדוף
+    await pa.waitForTimeout(600);
+    // קליק ימני → העברה לגאנט → חלון עם הפרטים → שבועות → העברה
+    await pa.locator(`[data-backlog-row="${mine.id}"] td`).first().click({ button: "right" });
+    await pa.click("[data-testid=backlog-schedule]");
+    await pa.waitForSelector("[data-testid=new-item-submit]");
+    assert((await pa.inputValue("#ni-name")) === `מהבאקלוג-${RUN}`, "name not prefilled");
+    await pa.click("[data-testid=new-item-submit]");
+    await pa.waitForSelector(`[data-backlog-row="${mine.id}"]`, { state: "detached" });
+    const pl = (await json<PlanData>(A, "GET", "/api/plan")).body;
+    const moved = pl.items.find((i) => i.name === `מהבאקלוג-${RUN}`);
+    assert(moved && moved.teamId === T_AZ1 && moved.priority === prio, `scheduled item: ${JSON.stringify(moved)}`);
+    assert(moved.id === mine.id, `ID changed on move to gantt: backlog ${mine.id} → item ${moved.id}`);
+    assert(!pl.items.some((i) => i.id === secret.id), "backlog ID collides with an existing gantt item");
+    assert(!(await json<BL[]>(A, "GET", "/api/backlog")).body.some((b) => b.id === mine.id), "item still in backlog after move");
+    assert((await json(A, "POST", `/api/backlog/${mine.id}/schedule`, { version: mine.version, item: { rowId: moved.rowId, name: "x", startWeek: addWeeks(cw, 50), endWeek: addWeeks(cw, 50) } })).status === 404, "double schedule");
+    // פריט בלי צוות: עריכת צוות בטבלה, ובמעבר לגאנט חובה להשלים צוות
+    await pa.reload(); await pa.waitForSelector(`[data-backlog-row="${noTeam.id}"]`);
+    await pa.selectOption(`[data-testid=backlog-team-${noTeam.id}]`, String(T_SYS));
+    await pa.waitForTimeout(600);
+    assert((await json<BL[]>(A, "GET", "/api/backlog")).body.find((b) => b.id === noTeam.id)?.teamId === T_SYS, "team edit in table not saved");
+    await pa.selectOption(`[data-testid=backlog-team-${noTeam.id}]`, "");
+    await pa.waitForTimeout(600);
+    assert((await json<BL[]>(A, "GET", "/api/backlog")).body.find((b) => b.id === noTeam.id)?.teamId === null, "team not cleared");
+    await pa.locator(`[data-backlog-row="${noTeam.id}"] td`).nth(2).click({ button: "right" });
+    await pa.click("[data-testid=backlog-schedule]");
+    await pa.waitForSelector("[data-testid=schedule-need-team]");
+    await pa.click("[data-testid=new-item-submit]");
+    await pa.waitForTimeout(500);
+    assert(await pa.locator("[data-testid=new-item-submit]").count() === 1, "scheduled without a team");
+    await pa.selectOption("[data-testid=target-select]", `team:${T_AZ1}`);
+    await pa.locator("[data-testid=new-item-submit]").click();
+    await pa.waitForSelector(`[data-backlog-row="${noTeam.id}"]`, { state: "detached" });
+    assert((await json<PlanData>(A, "GET", "/api/plan")).body.items.some((i) => i.name === `ללא-צוות-${RUN}` && i.teamId === T_AZ1), "no-team item not scheduled to chosen team");
+    // בחירה על גבי הגאנט: החלון → "בחירה על גבי הגאנט" → לחיצה כפולה בשורה → חלון "העברה לגאנט" עם שם הפריט
+    const row = await newRow(A, T_AZ1);
+    await pa.reload(); await pa.waitForSelector(`[data-backlog-row="${secret.id}"]`);
+    await pa.locator(`[data-backlog-row="${secret.id}"] td`).first().click({ button: "right" });
+    await pa.click("[data-testid=backlog-schedule]");
+    await pa.click("[data-testid=pick-on-gantt]");
+    await pa.waitForSelector("[data-testid=place-banner]");
+    const lane = pa.locator(`[data-lane-row="${row.id}"]`).first();
+    await lane.waitFor();
+    await lane.evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
+    const target = addWeeks(cw, 6);
+    await pa.locator(`[data-week="${target}"]`).evaluate((el) => el.scrollIntoView({ block: "nearest", inline: "center" }));
+    const lb = (await lane.boundingBox())!, wb = (await pa.locator(`[data-week="${target}"]`).boundingBox())!;
+    await pa.mouse.dblclick(wb.x + wb.width / 2, lb.y + lb.height / 2);
+    await pa.waitForSelector("[data-testid=new-item-submit]");
+    assert((await pa.inputValue("#ni-name")) === `סודי-${RUN}`, "placing did not prefill the backlog item");
+    await pa.click("[data-testid=new-item-submit]");
+    await pa.waitForSelector("[data-testid=place-banner]", { state: "detached" });
+    const placed = (await json<PlanData>(A, "GET", "/api/plan")).body.items.find((i) => i.name === `סודי-${RUN}`);
+    assert(placed && placed.rowId === row.id && placed.startWeek === target, `placed on gantt: ${JSON.stringify(placed)}`);
+    await pa.waitForSelector(`[data-bar="${placed.id}"]`);
+    assert(!(await json<BL[]>(A, "GET", "/api/backlog")).body.some((b) => b.id === secret.id), "placed item still in backlog");
   });
 
   await browser.close();

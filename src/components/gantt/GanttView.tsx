@@ -14,6 +14,7 @@ import {
 } from "@/lib/weeks";
 import { msCanEdit, msScopeLabel } from "@/lib/milestone";
 import { layoutLanes } from "@/lib/compare";
+import { useIsMobile } from "@/components/ui/useMobile";
 import { useTooltip } from "@/components/ui/tooltip";
 import { Floating, MenuItem } from "@/components/ui/popover";
 import { useConfirm } from "@/components/ui/dialog";
@@ -24,6 +25,7 @@ import { CROSS_FILTER, crossRowVisible, hasContentFilter, hideDomain, hideTeam, 
 import { useToast } from "@/components/ui/toast";
 import { GanttGrid, useCurrentWeek, type CrossGroup, type GanttGridHandle, type LaneSpec } from "./GanttGrid";
 import { geometry } from "./geometry";
+import { DepBadge, DepList } from "@/components/plan/Dependencies";
 
 type DragState = {
   item: ItemDTO;
@@ -54,7 +56,8 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   const toast = useToast();
   const [barFont] = useBarFontSize(ui.me.preferences);
   const gridRef = useRef<GanttGridHandle>(null);
-  const { weekW, rowH, crossLaneH } = geometry(view.density);
+  const mobile = useIsMobile();
+  const { weekW, rowH, crossLaneH } = geometry(view.density, false, mobile);
 
   const [win0, win1] = timeWindow(view.time, data);
   const timeline: Timeline = useMemo(() => buildTimeline(win0, win1), [win0, win1]);
@@ -78,7 +81,12 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     tip.hide();
   }, [tip]);
   const openMenu = useCallback((m: MenuState) => { closeAll(); setMenu(m); }, [closeAll]);
-  const openQuick = useCallback((q: QuickState) => { closeAll(); setQuick(q); }, [closeAll]);
+  // בזמן שיבוץ פריט מהבאקלוג — כל הוספה (לחיצה כפולה, +, הקלדה) פותחת את חלון "העברה לגאנט" עם פרטי הפריט
+  const openQuick = useCallback((q: QuickState) => {
+    closeAll();
+    if (ui.placing) ui.openNewItem({ rowId: q.rowId, startWeek: q.start, endWeek: q.end });
+    else setQuick(q);
+  }, [closeAll, ui]);
   const openPick = useCallback((p: PickState) => { closeAll(); setPick(p); }, [closeAll]);
   const openMarker = useCallback((m: { x: number; y: number; milestone?: MilestoneDTO; sprint?: SprintDTO }) => { closeAll(); setMarker(m); }, [closeAll]);
   const openSummary = useCallback((item: ItemDTO, x: number, y: number) => {
@@ -324,6 +332,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
       <div className="opacity-80">ID {i.id} · {cat.status(i.status).label}{i.priority !== cat.defaultPriority ? ` · תיעדוף ${cat.priority(i.priority).label}` : ""}</div>
       <div className="opacity-80">שבועות {weekNumber(i.startWeek)}–{weekNumber(i.endWeek)} · {fmtDate(i.startWeek)}–{fmtDate(weekEndOf(i.endWeek))}</div>
       {i.notes && <div className="max-w-[300px] truncate opacity-70">{i.notes}</div>}
+      <DepList item={i} />
       <div className="opacity-60">עודכן ע״י {userName(data, i.updatedById)}</div>
     </div>
   );
@@ -338,7 +347,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     return (
       <div key={opts?.ghost ? `g${i.id}` : i.id}
         data-bar={opts?.ghost ? undefined : i.id}
-        className={clsx("gantt-bar group/bar absolute z-10 flex items-center overflow-hidden rounded-[5px] border text-[12px] font-medium",
+        className={clsx("gantt-bar group/bar absolute z-10 flex items-center overflow-clip rounded-[5px] border text-[12px] font-medium",
           editable ? "cursor-grab" : "cursor-pointer",
           opts?.ghost && "pointer-events-none !z-30 shadow-pop",
           opts?.invalid && "!border-red-500 !bg-red-100 !text-red-700 ring-2 ring-red-300",
@@ -363,7 +372,10 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         {editable && !opts?.ghost && !box.cutEnd && (
           <span className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize opacity-0 group-hover/bar:opacity-100 bg-black/10" onMouseDown={(e) => startDrag(e, i, "end", true)} />
         )}
-        <span className="truncate px-1.5">{i.name}</span>
+        {/* השם "נדבק" לקצה הגלוי: גם כשתחילת הקובייה גלולה מתחת לעמודות התחום/צוות, הטקסט נשאר גלוי עד שהקובייה נעלמת */}
+        <span className="sticky flex min-w-0 items-center gap-1 px-1.5" style={{ right: "var(--labels-w)" }}>
+          <DepBadge item={i} /><span className="truncate">{i.name}</span>
+        </span>
       </div>
     );
   };
@@ -552,7 +564,8 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         renderLane={renderLane} renderTeamOverlay={renderTeamOverlay} renderTeamMarkers={renderTeamMarkers} renderBodyOverlay={renderBodyOverlay}
         renderDomainOverlay={renderDomainOverlay} renderRowControl={renderRowControl} teamLabelExtra={teamLabelExtra}
         teamEditable={(t) => store.canEditTeam(t)}
-        onLaneMouseDown={store.readOnly ? undefined : onLaneMouseDown} onLaneContextMenu={onLaneContextMenu}
+        // בטלפון אין סימון טווח (הקשה תמימה בזמן גלילה הייתה פותחת חלון הוספה) — מוסיפים מכפתור ה-+
+        onLaneMouseDown={store.readOnly || mobile ? undefined : onLaneMouseDown} onLaneContextMenu={onLaneContextMenu}
         onLabelContextMenu={setView ? (e, domainId, teamId) => openMenu({ x: e.clientX, y: e.clientY, teamId, label: { domainId, teamId } }) : undefined} />
 
       {drag?.started && !drag.valid && drag.reason && (
@@ -814,6 +827,7 @@ function ItemSummary({ item, data, point, editable, onClose, onOpen }: {
           <div>ID {item.id} · {m.label}{item.priority !== cat.defaultPriority ? ` · תיעדוף ${cat.priority(item.priority).label}` : ""}</div>
           <div className="tabular-nums">שבועות {weekNumber(item.startWeek)}–{weekNumber(item.endWeek)} · {fmtDate(item.startWeek)}–{fmtDate(weekEndOf(item.endWeek))}</div>
           {item.notes && <div className="line-clamp-3 whitespace-pre-line text-ink-500">{item.notes}</div>}
+          <div className="text-amber-900"><DepList item={item} max={3} /></div>
           <div className="text-ink-400">עודכן ע״י {userName(data, item.updatedById)}</div>
         </div>
         <div className="mt-2.5 flex items-center gap-2">

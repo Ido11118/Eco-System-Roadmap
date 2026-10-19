@@ -1,5 +1,6 @@
-// מבנה התחומים והצוותים של הארגון — קונפיגורציה פנימית.
-// המזהים (id) קבועים ואסור לשנותם לאחר הפריסה; שמות וסדר ניתן לעדכן כאן ולהריץ seed מחדש.
+// מבנה התחומים והצוותים של הארגון — נתוני אתחול.
+// תחומים: קבועים כאן (שם וסדר מתעדכנים מהקוד בכל הרצת seed). המזהים (id) קבועים ואסור לשנותם לאחר הפריסה.
+// צוותים: נוצרים מכאן רק בהתקנה ראשונה. אחר כך הם מנוהלים במסך "מבנה הגאנט" (ניהול מערכת), ושינוי כאן לא ישפיע.
 export type OrgTeam = { id: number; key: string; name: string };
 export type OrgDomain = { id: number; key: string; name: string; teams: OrgTeam[] };
 
@@ -9,6 +10,7 @@ export const ORG_STRUCTURE: OrgDomain[] = [
     { id: 201, key: "azarim-1", name: "עזרים 1" },
     { id: 202, key: "azarim-2", name: "עזרים 2" },
     { id: 203, key: "sysadmin", name: "ניהול מערכת" },
+    { id: 204, key: "team-204", name: "אלביט" },
   ] },
   { id: 3, key: "rokak", name: "רוקק", teams: [{ id: 301, key: "rokak", name: "רוקק" }] },
   { id: 4, key: "esh", name: "אש", teams: [

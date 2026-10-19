@@ -15,12 +15,23 @@ export type ItemDTO = {
   status: string; // מפתח מקטלוג הסטטוסים
   priority: string; // מפתח מקטלוג התיעדופים
   notes: string;
+  /** תלויות שמנהל המוצר צריך לטפל בהן (חסר בתמונות מצב ישנות — להשתמש ב-depsOf) */
+  dependencies?: Dependency[];
   version: number;
   createdAt: string;
   createdById: number | null;
   updatedAt: string;
   updatedById: number | null;
 };
+
+/** פריט בבאקלוג: עוד לא משובץ בזמן; שייך לתחום, והצוות לא חובה (משלימים במעבר לגאנט) */
+export type BacklogDTO = {
+  id: number; name: string; domainId: number; teamId: number | null; priority: string; notes: string; version: number;
+  createdAt: string; createdById: number | null; updatedAt: string; updatedById: number | null;
+};
+
+/** תלות של תכולה: מה צריך לקרות, מול מי, והאם כבר טופלה */
+export type Dependency = { id: string; text: string; on: string; done: boolean };
 
 /** שיוך אבן דרך: teamId = צוות; domainId = תחום שלם; שניהם null = רוחבי (כל הארגון) */
 export type MilestoneDTO = {
@@ -63,11 +74,13 @@ export type UserPreferences = {
   density?: "compact" | "normal" | "wide";
   tableColumnWidths?: Record<string, number>;
   lastView?: ViewConfig; // הסינונים והגדרות התצוגה האחרונים — משוחזרים בכניסה הבאה
-  lastMode?: "gantt" | "table" | "compare"; // התצוגה האחרונה שבה המשתמש עבד
+  lastMode?: "gantt" | "table" | "compare" | "backlog"; // התצוגה האחרונה שבה המשתמש עבד
   sidebarCollapsed?: boolean;
   textSize?: TextSize; // גודל התצוגה האישי (גודל טקסט וכל הממשק)
   tableCollapsed?: number[]; // צוותים שמקטע שלהם מכווץ בטבלת התכולות
-  barFontSize?: number; // גודל הטקסט בתוך קוביות הגאנט (פיקסלים)
+  viewOnly?: boolean; // "מצב צפייה בלבד": המשתמש בחר לא לערוך (גם אם יש לו הרשאות) — מונע שינויים בטעות
+  barFontSize?: number;
+  ganttCols?: { domain: number; team: number }; // רוחב עמודות "תחום" ו"צוות" בגאנט (פיקסלים) // גודל הטקסט בתוך קוביות הגאנט (פיקסלים)
 };
 export type TextSize = "sm" | "md" | "lg" | "xl";
 

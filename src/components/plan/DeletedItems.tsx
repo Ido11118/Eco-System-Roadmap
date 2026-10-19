@@ -22,7 +22,7 @@ export function DeletedItemsButton({ data, isSuper }: { data: PlanData; isSuper:
   return (
     <>
       <button className="btn-ghost btn-sm" onClick={() => setOpen(true)} data-testid="deleted-items" title="שחזור תכולות שנמחקו (עם אותו ID)">
-        <ArchiveRestore size={14} />תכולות שנמחקו
+        <ArchiveRestore size={14} /><span className="hidden md:inline">תכולות שנמחקו</span>
       </button>
       {open && <DeletedItemsDialog data={data} isSuper={isSuper} onClose={() => setOpen(false)} />}
     </>

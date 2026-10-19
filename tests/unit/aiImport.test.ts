@@ -124,4 +124,28 @@ describe("ai import", () => {
     ]);
     expect(p).toEqual([{ rowId: 1 }, { rowId: 2 }, { newRow: 0 }, { rowId: 1 }]);
   });
+  it("backlog: prompt explains it; domain required, team optional (team decides the domain); no weeks", () => {
+    const p = buildAiPrompt(data, perms, cat, "2026-10-16");
+    expect(p).toContain("פריט לבאקלוג (backlog)");
+    expect(p).toContain('"backlog"');
+    const es = parseImport(JSON.stringify({ backlog: [
+      { name: "רעיון", domain: "agam" },
+      { name: "עם צוות", team: "azarim-1", domain: "esh", priority: "HIGH" }, // צוות מתחום אחר — התחום של הצוות גובר
+      { name: "בלי תחום" },
+      { name: "תחום בלי הרשאה", domain: "esh" },
+    ] }), data, cat);
+    expect(es.map((e) => e.kind)).toEqual(["backlog", "backlog", "backlog", "backlog"]);
+    expect(es[0]).toMatchObject({ domainId: 2, teamId: null });
+    expect(es[1]).toMatchObject({ domainId: 2, teamId: 201, priority: "HIGH" });
+    expect(es[1].warnings.join()).toContain("לא שייך לתחום");
+    const errs = es.map((e) => validateEntry(e, data, perms));
+    expect(errs[0]).toEqual([]); // בלי שבועות — תקין
+    expect(errs[1]).toEqual([]);
+    expect(errs[2].join()).toContain("לא צוין תחום");
+    expect(errs[3].join()).toContain("אין לך הרשאת עריכה");
+    expect(toPayload(es.slice(0, 2)).backlog).toEqual([
+      { name: "רעיון", domainId: 2, teamId: null, notes: "" },
+      { name: "עם צוות", domainId: 2, teamId: 201, priority: "HIGH", notes: "" },
+    ]);
+  });
 });

@@ -10,6 +10,7 @@ import {
   pgTable, pgEnum, serial, integer, text, boolean, timestamp, date, jsonb, real,
   primaryKey, uniqueIndex, index, check, varchar,
 } from "drizzle-orm/pg-core";
+import type { Dependency } from "@/lib/types";
 
 export const userRole = pgEnum("user_role", ["SUPER", "USER"]);
 export const accountStatus = pgEnum("account_status", ["PENDING", "APPROVED", "REJECTED", "SUSPENDED"]);
@@ -106,6 +107,8 @@ export const teams = pgTable("teams", {
   name: text("name").notNull(),
   domainId: integer("domain_id").notNull().references(() => domains.id),
   sortOrder: integer("sort_order").notNull(),
+  // צוות שהוסר ממבנה הגאנט (ניהול מערכת): נשמר לטובת היסטוריה ותמונות מצב, אבל לא מוצג ולא ניתן לעריכה
+  archivedAt: ts("archived_at"),
 }, (t) => [index("teams_domain_idx").on(t.domainId)]);
 
 export const userDomainPermissions = pgTable("user_domain_permissions", {
@@ -114,6 +117,23 @@ export const userDomainPermissions = pgTable("user_domain_permissions", {
   grantedAt: ts("granted_at").notNull().defaultNow(),
   grantedById: integer("granted_by_id"),
 }, (t) => [primaryKey({ columns: [t.userId, t.domainId] })]);
+
+// באקלוג: רעיונות/תכולות שעוד לא שובצו בזמן. שייכים לתחום (ואופציונלית לצוות), וגלויים רק למי שמורשה לערוך את התחום.
+// "העברה לגאנט" יוצרת תכולה רגילה (work_items) ומוחקת את הרשומה מכאן.
+export const backlogItems = pgTable("backlog_items", {
+  // מזהה מאותו מונה של התכולות (work_items_id_seq): אין התנגשות עם ID של תכולה, והמזהה נשמר במעבר לגאנט
+  id: integer("id").primaryKey().default(sql`nextval('work_items_id_seq')`),
+  name: text("name").notNull(),
+  domainId: integer("domain_id").notNull().references(() => domains.id), // התחום קובע מי רואה ועורך
+  teamId: integer("team_id").references(() => teams.id), // לא חובה בבאקלוג — חובה רק במעבר לגאנט
+  priority: varchar("priority", { length: 40 }).notNull().references(() => priorities.key, { onUpdate: "cascade" }),
+  notes: text("notes").notNull().default(""),
+  version: integer("version").notNull().default(1),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  createdById: integer("created_by_id"),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+  updatedById: integer("updated_by_id"),
+}, (t) => [index("backlog_items_team_idx").on(t.teamId), index("backlog_items_domain_idx").on(t.domainId)]);
 
 export const workRows = pgTable("work_rows", {
   id: serial("id").primaryKey(),
@@ -140,6 +160,7 @@ export const workItems = pgTable("work_items", {
   status: varchar("status", { length: 40 }).notNull().references(() => statuses.key, { onUpdate: "cascade" }),
   priority: varchar("priority", { length: 40 }).notNull().references(() => priorities.key, { onUpdate: "cascade" }),
   notes: text("notes").notNull().default(""),
+  dependencies: jsonb("dependencies").$type<Dependency[]>().notNull().default([]), // תלויות (רשימה קטנה — נשמרת עם התכולה)
   version: integer("version").notNull().default(1),
   createdAt: ts("created_at").notNull().defaultNow(),
   createdById: integer("created_by_id"),

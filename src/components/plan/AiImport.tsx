@@ -25,7 +25,7 @@ export function AiImportButton({ store }: { store: PlanStore }) {
   return (
     <>
       {/* כפתור עגול בתחתית סרגל הצד (40px — נכנס גם כשהסרגל מכווץ) */}
-      <button onClick={() => setOpen(true)} data-testid="ai-import-open" aria-label="הוספה בעזרת AI" title="הוספה בעזרת AI — תכולות, אבני דרך וספרינטים בשיחה עם כלי AI"
+      <button onClick={() => setOpen(true)} data-testid="ai-import-open" aria-label="הוספה בעזרת AI" title="הוספה בעזרת AI — תכולות, אבני דרך, ספרינטים ופריטי באקלוג בשיחה עם כלי AI"
         className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-fuchsia-600 to-brand-600 text-white shadow-pop transition-transform duration-150 hover:scale-105 hover:from-fuchsia-700 hover:to-brand-700">
         <Sparkles size={18} />
       </button>
@@ -34,7 +34,7 @@ export function AiImportButton({ store }: { store: PlanStore }) {
   );
 }
 
-const KIND_TITLE: Record<ImportKind, string> = { item: "תכולות", milestone: "אבני דרך", sprint: "ספרינטים" };
+const KIND_TITLE: Record<ImportKind, string> = { item: "תכולות", milestone: "אבני דרך", sprint: "ספרינטים", backlog: "באקלוג (בלי שבועות — לשיבוץ בהמשך)" };
 
 export function AiImportDialog({ store, open, onClose }: { store: PlanStore; open: boolean; onClose: () => void }) {
   const data = store.data;
@@ -94,9 +94,11 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
     setBusy(true);
     try {
       const res = await api<ImportResult>("POST", "/api/import", toPayload(valid));
-      await qc.invalidateQueries({ queryKey: PLAN_KEY });
+      await Promise.all([qc.invalidateQueries({ queryKey: PLAN_KEY }), qc.invalidateQueries({ queryKey: ["backlog"] })]);
       const n = res.itemIds.length + res.milestoneIds.length + res.sprintIds.length;
-      toast.show("success", `נוספו ${n} פריטים לגאנט${invalidCount ? ` (${invalidCount} עם שגיאות לא יובאו)` : ""}`, {
+      const nb = res.backlogIds.length;
+      const what = [n ? `${n} פריטים לגאנט` : "", nb ? `${nb} לבאקלוג` : ""].filter(Boolean).join(" ו-");
+      toast.show("success", `נוספו ${what}${invalidCount ? ` (${invalidCount} עם שגיאות לא יובאו)` : ""}`, {
         ttl: 15000,
         action: { label: "ביטול הייבוא", run: () => { void undo(res); } },
       });
@@ -107,7 +109,7 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
   const undo = async (res: ImportResult) => {
     try {
       const r = await api<{ removed: number; skipped: number }>("POST", "/api/import/undo", res);
-      await qc.invalidateQueries({ queryKey: PLAN_KEY });
+      await Promise.all([qc.invalidateQueries({ queryKey: PLAN_KEY }), qc.invalidateQueries({ queryKey: ["backlog"] })]);
       toast.show("success", `הייבוא בוטל (${r.removed} פריטים הוסרו${r.skipped ? `; ${r.skipped} נערכו בינתיים ונשארו` : ""})`);
     } catch (e) { toast.show("error", (e as Error).message); }
   };
@@ -141,7 +143,7 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
           {showPrompt && <PromptView prompt={prompt} />}
         </Step>
 
-        <Step n={2} title="בנה בשיחה את התכולות, אבני הדרך והספרינטים">
+        <Step n={2} title="בנה בשיחה את התכולות, אבני הדרך, הספרינטים ופריטי הבאקלוג">
           <p className="text-ink-500">תאר בשפה חופשית מה אתה רוצה לתכנן, או העלה קובץ (Excel, מסמך, מצגת). הכלי ישאל שאלות הבהרה ויציג סיכום לאישור. בסוף בקש ממנו &quot;פלט סופי&quot;.</p>
         </Step>
 
@@ -162,7 +164,7 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
               {newRows > 0 && <span className="text-ink-500">ייווצרו {newRows} שורות חדשות כדי למנוע חפיפה</span>}
             </div>
             {entries.length === 0 && <div className="card p-4 text-center text-ink-500">כל הפריטים נמחקו מהתצוגה המקדימה.</div>}
-            {(["item", "milestone", "sprint"] as const).map((k) => byKind(k).length > 0 && (
+            {(["item", "milestone", "sprint", "backlog"] as const).map((k) => byKind(k).length > 0 && (
               <div key={k} className="mb-3">
                 <div className="mb-1 font-semibold">{KIND_TITLE[k]} ({byKind(k).length})</div>
                 <div className="overflow-x-auto rounded-lg border border-ink-200">
@@ -170,7 +172,7 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
                     {/* אותן עמודות ובאותו סדר כמו בטבלת התכולות */}
                     <thead className="bg-ink-50 text-ink-500">
                       <tr>
-                        {["תחום", "צוות", "שם", "תיעדוף", "סטטוס", "הערות", k === "item" ? "שבוע התחלה" : k === "milestone" ? "שבוע (תאריך)" : "התחלה", k === "item" ? "שבוע סיום" : k === "milestone" ? "" : "סיום"].map((h, i) => (
+                        {["תחום", k === "backlog" ? "צוות (לא חובה)" : "צוות", "שם", "תיעדוף", "סטטוס", "הערות", k === "item" ? "שבוע התחלה" : k === "milestone" ? "שבוע (תאריך)" : k === "backlog" ? "" : "התחלה", k === "item" ? "שבוע סיום" : k === "sprint" ? "סיום" : ""].map((h, i) => (
                           <th key={i} className="whitespace-nowrap px-2 py-1.5 text-start font-medium">{h}</th>
                         ))}
                         <th className="w-8" />
@@ -189,7 +191,7 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
         )}
 
         {entries && valid.length > 0 && (
-          <Step n={5} title="אשר — הכל ייכנס לגאנט">
+          <Step n={5} title="אשר — הכל ייכנס לגאנט (ופריטי הבאקלוג — לבאקלוג)">
             <p className="text-ink-500">לחץ &quot;אישור והוספה לגאנט&quot; למטה. אחרי ההוספה יופיע כפתור &quot;ביטול הייבוא&quot; למקרה של טעות.</p>
           </Step>
         )}
@@ -241,8 +243,14 @@ function EntryRow({ e, errors, data, perms, onPatch, onRemove }: {
       <tr className={clsx("border-t border-ink-100", bad && "bg-red-50/70")} data-testid={`ai-row-${e.kind}`} data-invalid={bad || undefined}>
         {/* תחום: נגזר מהצוות (בספרינט — נבחר ישירות) */}
         <td className={clsx(cell, "whitespace-nowrap pt-2 text-ink-600")}>
-          {e.kind === "sprint" ? (
-            <select className={clsx(inp, !e.domainId && "text-ink-400")} value={e.domainId ?? ""} onChange={(ev) => onPatch({ domainId: Number(ev.target.value) || null, targetError: undefined })}>
+          {e.kind === "sprint" || e.kind === "backlog" ? (
+            <select className={clsx(inp, !e.domainId && "text-ink-400")} value={e.domainId ?? ""} data-testid={`ai-domain-${e.kind}`}
+              onChange={(ev) => {
+                const domainId = Number(ev.target.value) || null;
+                // באקלוג: החלפת תחום מנקה צוות שלא שייך אליו
+                const keepTeam = e.kind === "backlog" && e.teamId !== null && data.teams.find((t) => t.id === e.teamId)?.domainId === domainId;
+                onPatch({ domainId, targetError: undefined, ...(e.kind === "backlog" && !keepTeam ? { teamId: null } : {}) });
+              }}>
               <option value="" disabled>בחר תחום…</option>
               {data.domains.filter((d) => perms.canEditDomain(d.id) || d.id === e.domainId).map((d) => (
                 <option key={d.id} value={d.id} disabled={!perms.canEditDomain(d.id)}>{d.name}{perms.canEditDomain(d.id) ? "" : " (אין הרשאה)"}</option>
@@ -253,7 +261,20 @@ function EntryRow({ e, errors, data, perms, onPatch, onRemove }: {
             : (e.cross || (e.kind === "milestone" && !e.targetError)) ? "רוחבי" : <span className="text-[11.5px] text-ink-300">לפי הצוות</span>}
         </td>
         <td className={cell}>
-          {e.kind === "sprint" ? <NA kind={e.kind} /> : (
+          {e.kind === "sprint" ? <NA kind={e.kind} /> : e.kind === "backlog" ? (
+            // באקלוג: צוות לא חובה; צוות מתחום אחר מחליף גם את התחום
+            <select className={clsx(inp, e.teamId === null && "text-ink-400")} value={e.teamId ?? ""} data-testid="ai-team-backlog"
+              onChange={(ev) => {
+                const t = data.teams.find((x) => x.id === Number(ev.target.value));
+                onPatch(t ? { teamId: t.id, domainId: t.domainId, targetError: undefined } : { teamId: null });
+              }}>
+              <option value="">— ללא צוות —</option>
+              {data.domains.filter((d) => perms.canEditDomain(d.id)).map((d) => {
+                const ts = data.teams.filter((t) => t.domainId === d.id);
+                return ts.length ? <optgroup key={d.id} label={d.name}>{ts.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</optgroup> : null;
+              })}
+            </select>
+          ) : (
             <select className={clsx(inp, !target && "text-ink-400")} value={target} onChange={(ev) => setTarget(ev.target.value)}>
               <option value="" disabled>בחר צוות…</option>
               {teamOptions}
@@ -269,7 +290,7 @@ function EntryRow({ e, errors, data, perms, onPatch, onRemove }: {
         </td>
         <td className={cell}><input className={clsx(inp, "min-w-[180px]")} placeholder="הזן שם…" value={e.name} onChange={(ev) => onPatch({ name: ev.target.value })} /></td>
         <td className={cell}>
-          {e.kind !== "item" ? <NA kind={e.kind} /> : (
+          {e.kind !== "item" && e.kind !== "backlog" ? <NA kind={e.kind} /> : (
             <select className={clsx(inp, "min-w-[88px]", !e.priority && "text-ink-400")} value={e.priority} onChange={(ev) => onPatch({ priority: ev.target.value })} title={e.priority ? undefined : "ריק — ייקבע ערך ברירת המחדל"}>
               <option value="">בחר…</option>
               {cat.priorities.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
@@ -285,8 +306,8 @@ function EntryRow({ e, errors, data, perms, onPatch, onRemove }: {
           )}
         </td>
         <td className={cell}><input className={clsx(inp, "min-w-[140px]")} placeholder="הוסף הערה…" value={e.notes} onChange={(ev) => onPatch({ notes: ev.target.value })} /></td>
-        <td className={cell}><WeekCell value={e.start} exact={e.kind !== "item"} onChange={(v) => onPatch({ start: v })} /></td>
-        <td className={cell}>{e.kind === "milestone" ? <NA kind={e.kind} /> : <WeekCell value={e.end} exact={e.kind !== "item"} onChange={(v) => onPatch({ end: v })} />}</td>
+        <td className={cell}>{e.kind === "backlog" ? <NA kind={e.kind} /> : <WeekCell value={e.start} exact={e.kind !== "item"} onChange={(v) => onPatch({ start: v })} />}</td>
+        <td className={cell}>{e.kind === "milestone" || e.kind === "backlog" ? <NA kind={e.kind} /> : <WeekCell value={e.end} exact={e.kind !== "item"} onChange={(v) => onPatch({ end: v })} />}</td>
         <td className={cell}><button className="icon-btn text-ink-400 hover:text-red-600" onClick={onRemove} aria-label="הסרה מהייבוא" title="הסרה מהייבוא"><Trash2 size={14} /></button></td>
       </tr>
       {(bad || e.warnings.length > 0) && (
@@ -322,7 +343,7 @@ function WeekCell({ value, exact, onChange }: { value: string; exact?: boolean; 
 
 /** שדה שלא קיים בסוג הפריט הזה (למשל סטטוס לאבן דרך) — להבדיל משדה ריק שאפשר למלא */
 function NA({ kind }: { kind: ImportKind }) {
-  return <span className="block px-1.5 pt-1.5 text-ink-300" title={`לא רלוונטי ל${kind === "milestone" ? "אבן דרך" : "ספרינט"}`}>—</span>;
+  return <span className="block px-1.5 pt-1.5 text-ink-300" title={`לא רלוונטי ל${kind === "milestone" ? "אבן דרך" : kind === "backlog" ? "פריט באקלוג" : "ספרינט"}`}>—</span>;
 }
 
 /** תצוגת הפרומפט לקריאה נוחה: חלונית גבוהה עם גלילה, כותרות מודגשות ובלוק ה-JSON בגופן קוד */

@@ -6,10 +6,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { replaceEqualDeep, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiErr } from "@/lib/api";
 import type { ItemDTO, Me, MilestoneDTO, PlanData, RowDTO, SprintDTO } from "@/lib/types";
+import { depsOf } from "@/lib/deps";
 import { useCatalog } from "@/components/CatalogProvider";
 import { useToast } from "@/components/ui/toast";
 
-export type ItemPatch = Partial<Pick<ItemDTO, "name" | "status" | "priority" | "notes" | "startWeek" | "endWeek" | "rowId">>;
+export type ItemPatch = Partial<Pick<ItemDTO, "name" | "status" | "priority" | "notes" | "dependencies" | "startWeek" | "endWeek" | "rowId">>;
 export type NewItem = { rowId: number; name: string; startWeek: string; endWeek: string; status?: string; priority?: string; notes?: string };
 export type MsInput = { name: string; date: string; teamId: number | null; domainId: number | null; notes?: string };
 export type SprintInput = { name: string; startDate: string; endDate: string; domainId: number; notes?: string };
@@ -152,6 +153,7 @@ export function useLivePlan(me: Me): PlanStore {
     if (patch.priority) return `התיעדוף של ${n} שונה ל"${cat.priority(patch.priority).label}"`;
     if (patch.name !== undefined) return `השם שונה ל"${patch.name}"`;
     if (patch.notes !== undefined) return `ההערות של ${n} עודכנו`;
+    if (patch.dependencies !== undefined) return `התלויות של ${n} עודכנו`;
     if (patch.rowId !== undefined) return `${n} הועברה`;
     if (patch.startWeek || patch.endWeek) return `טווח השבועות של ${n} שונה`;
     return `${n} עודכנה`;
@@ -164,7 +166,7 @@ export function useLivePlan(me: Me): PlanStore {
       if (clash) { toast.show("error", `הטווח חופף לתכולה "${clash.name}" באותה שורה`); return false; }
     }
     const before: ItemPatch = {};
-    for (const k of Object.keys(patch) as (keyof ItemPatch)[]) (before as Record<string, unknown>)[k] = item[k];
+    for (const k of Object.keys(patch) as (keyof ItemPatch)[]) (before as Record<string, unknown>)[k] = k === "dependencies" ? depsOf(item) : item[k];
     const newTeam = patch.rowId ? d?.rows.find((r) => r.id === patch.rowId)?.teamId ?? item.teamId : item.teamId;
     replaceItem({ ...item, ...patch, teamId: newTeam }); // Optimistic
     try {
@@ -365,6 +367,11 @@ export function readOnlyStore(me: Me, data: PlanData | undefined, loading: boole
     deleteItem: noop, createRow: async () => null, deleteRow: noop, createMilestone: no, updateMilestone: no, deleteMilestone: no,
     createSprint: no, updateSprint: no, deleteSprint: no, undo: () => {}, refresh: () => {},
   };
+}
+
+/** "מצב צפייה בלבד" על המצב הנוכחי: אותם נתונים חיים (כולל היסטוריית שינויים), בלי אפשרות לשנות דבר */
+export function viewOnlyStore(me: Me, live: PlanStore): PlanStore {
+  return { ...readOnlyStore(me, live.data, live.loading, live.error), kind: "live", refresh: live.refresh };
 }
 
 // ---------------------------------------------------------------------------

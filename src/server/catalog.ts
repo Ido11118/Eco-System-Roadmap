@@ -1,7 +1,7 @@
 import "server-only";
 import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { statuses, priorities, workItems } from "@/db/schema";
+import { statuses, priorities, workItems, backlogItems } from "@/db/schema";
 import { makeCatalog, borderFor, contrastText, type Catalog, type CatalogData, type StatusCategory } from "@/lib/catalog";
 import type { Me } from "@/lib/types";
 import { ApiError } from "./errors";
@@ -137,13 +137,16 @@ async function deletePriorityImpl(me: Me, key: string, replaceWith?: string) {
     const [cur] = await tx.select().from(priorities).where(eq(priorities.key, key));
     if (!cur || cur.archived) throw new ApiError(404, "התיעדוף לא נמצא");
     if (cur.isDefault) throw new ApiError(400, "לא ניתן למחוק את תיעדוף ברירת המחדל. קבע קודם תיעדוף אחר כברירת מחדל.");
-    const [{ n }] = (await tx.execute(sql`select count(*)::int as n from work_items where priority = ${key}`)).rows as { n: number }[];
+    // תכולות בגאנט + פריטים בבאקלוג
+    const [{ n }] = (await tx.execute(sql`select ((select count(*) from work_items where priority = ${key}) + (select count(*) from backlog_items where priority = ${key}))::int as n`)).rows as { n: number }[];
     if (n > 0) {
       if (!replaceWith || replaceWith === key) throw new ApiError(409, `יש ${n} תכולות בתיעדוף זה. יש לבחור תיעדוף חלופי.`, { inUse: n });
       const [rep] = await tx.select().from(priorities).where(eq(priorities.key, replaceWith));
       if (!rep || rep.archived) throw new ApiError(400, "התיעדוף החלופי לא נמצא");
       await tx.update(workItems).set({ priority: replaceWith, version: sql`${workItems.version} + 1`, updatedAt: new Date(), updatedById: me.id })
         .where(eq(workItems.priority, key));
+      await tx.update(backlogItems).set({ priority: replaceWith, version: sql`${backlogItems.version} + 1`, updatedAt: new Date(), updatedById: me.id })
+        .where(eq(backlogItems.priority, key));
     }
     await tx.update(priorities).set({ archived: true, replacedBy: n > 0 ? replaceWith! : null }).where(eq(priorities.key, key));
     await audit(tx, me.id, "catalog", key, "deletePriority", { replaceWith: replaceWith ?? null, moved: n },

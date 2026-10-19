@@ -3,9 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { GitCompareArrows, GanttChart, Pencil, Plus, Camera, Eye, AlertCircle, Loader2, Lock, RectangleHorizontal, Diamond, Flag, Users, User as UserIcon } from "lucide-react";
+import { GitCompareArrows, GanttChart, Link2, ListTodo, Pencil, Plus, Camera, Eye, AlertCircle, Loader2, Lock, RectangleHorizontal, Diamond, Flag, Users, User as UserIcon } from "lucide-react";
 import { AiImportButton } from "./AiImport";
-import type { Me, PlanData, SnapshotMeta, ViewConfig } from "@/lib/types";
+import type { BacklogDTO, ItemDTO, Me, PlanData, SnapshotMeta, ViewConfig } from "@/lib/types";
 import { useCatalog } from "@/components/CatalogProvider";
 import { fmtDate, todayIL, isISODate } from "@/lib/weeks";
 import { api } from "@/lib/api";
@@ -16,16 +16,17 @@ import { AppShell } from "@/components/AppShell";
 import { GanttView, type GanttHandle } from "@/components/gantt/GanttView";
 import { CompareView, type CompareHandle } from "@/components/gantt/CompareView";
 import { TableView } from "@/components/table/TableView";
-import { useLivePlan, readOnlyStore, type PlanStore } from "./store";
+import { useLivePlan, readOnlyStore, viewOnlyStore, type PlanStore } from "./store";
 import { WorkspaceUIProvider, useWorkspaceUI } from "./ui";
 import { FilterBar, type SavedView } from "./FilterBar";
 import { defaultViewConfig, permissionDefaultDomains, revealFor, type Revealable } from "./filters";
-import { currentPrefs, sanitizeView, savePrefs } from "./prefs";
+import { currentPrefs, sanitizeView, savePrefs, useViewOnly } from "./prefs";
 import { locateItem } from "./locate";
 import { DeletedItemsButton } from "./DeletedItems";
+import { BacklogView } from "@/components/backlog/BacklogView";
 
-type Mode = "gantt" | "table" | "compare";
-const MODES: Mode[] = ["gantt", "table", "compare"];
+type Mode = "gantt" | "table" | "compare" | "backlog";
+const MODES: Mode[] = ["gantt", "table", "compare", "backlog"];
 type SnapResp = { data: PlanData; revision: { revisionNo: number; createdAt: string } };
 
 /** צד בהשוואה: המצב הנוכחי, או Snapshot (ואופציונלית גרסה מסוימת שלו). בכתובת: "live" / "12" / "12:34" */
@@ -50,7 +51,7 @@ export function PlanApp({ me }: { me: Me }) {
     if (currentPrefs(me.preferences).lastMode !== mode) savePrefs({ lastMode: mode });
   }, [mode, me.preferences]);
 
-  const snapId = params.get("snap") ? Number(params.get("snap")) : null; // צפייה ב-Snapshot
+  const snapId = mode !== "backlog" && params.get("snap") ? Number(params.get("snap")) : null; // צפייה ב-Snapshot
   const snapRev = params.get("rev") ? Number(params.get("rev")) : null;
   // השוואה: שני צדדים. תאימות לאחור: base/brev = Snapshot מול המצב הנוכחי
   const legacyBase = params.get("base") ? `${params.get("base")}${params.get("brev") ? `:${params.get("brev")}` : ""}` : null;
@@ -65,6 +66,17 @@ export function PlanApp({ me }: { me: Me }) {
   }, [params, router]);
 
   const live = useLivePlan(me);
+  // שיבוץ פריט מהבאקלוג ישירות על הגאנט (?place=<id>): סימון טווח בשורה → חלון "העברה לגאנט" עם פרטי הפריט
+  const placeId = mode === "gantt" && Number(params.get("place")) > 0 ? Number(params.get("place")) : null;
+  const backlogQ = useQuery({ queryKey: ["backlog"], queryFn: () => api<BacklogDTO[]>("GET", "/api/backlog"), enabled: !!placeId });
+  const placing = placeId ? backlogQ.data?.find((b) => b.id === placeId) ?? null : null;
+  useEffect(() => {
+    if (placeId && backlogQ.data && !placing) { toast.show("info", "הפריט כבר לא נמצא בבאקלוג (ייתכן שכבר הועבר)"); setParams({ place: null }); }
+  }, [placeId, backlogQ.data, placing]); // eslint-disable-line react-hooks/exhaustive-deps
+  const onScheduled = useCallback((it: ItemDTO, onGantt: boolean) => {
+    if (onGantt) { setParams({ place: null, locate: String(it.id) }); toast.show("success", `"${it.name}" הועבר מהבאקלוג לגאנט`); return; }
+    toast.show("success", `"${it.name}" הועבר מהבאקלוג לגאנט`, { action: { label: "הצגה בגאנט", run: () => router.push(`/plan?view=gantt&locate=${it.id}`) } });
+  }, [setParams, toast, router]);
   const snapshots = useQuery({ queryKey: ["snapshots"], queryFn: () => api<SnapshotMeta[]>("GET", "/api/snapshots") });
   const snapQ = useQuery({
     queryKey: ["snapshot", snapId, snapRev],
@@ -101,11 +113,15 @@ export function PlanApp({ me }: { me: Me }) {
 
   // מצב השוואה הוא קריאה בלבד לכל המשתמשים — גם חלונית התכולה ו-Ctrl+Z לא יכולים לשנות נתונים.
   // חלונית התכולה מציגה את צד ה"ביצוע" של ההשוואה.
+  // "מצב צפייה בלבד" (בחירה אישית בסרגל העליון): הנתונים החיים, בלי אפשרות לשנות — למי שרק רוצה לצפות בלי לטעות
+  const canEditSomething = me.role === "SUPER" || me.domainIds.length > 0 || me.canEditCross;
+  const [viewOnlyPref, setViewOnly] = useViewOnly(me.preferences);
+  const viewOnly = viewOnlyPref && canEditSomething;
   const store: PlanStore = useMemo(() => (mode === "compare"
     ? readOnlyStore(me, cmp?.actual.data ?? live.data, live.loading, live.error)
     : snapId
       ? readOnlyStore(me, snapQ.data?.data, snapQ.isLoading, snapQ.error ? (snapQ.error as Error).message : null)
-      : live), [snapId, mode, me, snapQ.data, snapQ.isLoading, snapQ.error, live, cmp]);
+      : viewOnly ? viewOnlyStore(me, live) : live), [snapId, mode, me, snapQ.data, snapQ.isLoading, snapQ.error, live, cmp, viewOnly]);
 
   // ---------- הגדרות תצוגה (אישיות, נשמרות בשרת לכל משתמש) ----------
   const [view, setViewState] = useState<ViewConfig>(() => {
@@ -162,6 +178,15 @@ export function PlanApp({ me }: { me: Me }) {
     },
   }), [store, live, reveal]);
 
+  // ?locate=<id>: איתור תכולה (למשל אחרי העברה מהבאקלוג) — מחכים שתופיע בנתונים, מציגים אותה ומנקים את הפרמטר
+  const locateId = Number(params.get("locate")) || null;
+  useEffect(() => {
+    if (!locateId || mode === "backlog" || snapId || !live.data?.items.some((i) => i.id === locateId)) return;
+    const msg = locateItem(locateId, live.data, view, setView, mode);
+    setParams({ locate: null });
+    if (msg) toast.show("info", msg);
+  }, [locateId, live.data, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ---------- קיצורי מקלדת ----------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -182,10 +207,10 @@ export function PlanApp({ me }: { me: Me }) {
   const cmpError = cmp?.plan.error ?? cmp?.actual.error ?? null;
 
   return (
-    <WorkspaceUIProvider store={workStore} me={me}>
+    <WorkspaceUIProvider store={workStore} me={me} placing={placing} onScheduled={onScheduled}>
       <AppShell me={me} active={mode} sidebarAction={mode !== "compare" && !snapId ? <AiImportButton store={workStore} /> : undefined}>
         <TopBar me={me}>
-          {mode !== "compare" && (
+          {mode !== "compare" && mode !== "backlog" && (
             <SourceSelect snapshots={snapshots.data ?? []} value={snapId} onChange={(id) => setParams({ snap: id ? String(id) : null, rev: null })} />
           )}
           {mode === "compare" && (
@@ -195,16 +220,40 @@ export function PlanApp({ me }: { me: Me }) {
           <div className="mr-auto flex items-center gap-2">
             {mode === "compare" && (
               <button className="btn-secondary" onClick={() => router.push("/plan?view=gantt")} data-testid="compare-exit">
-                <GanttChart size={14} />סיום וחזרה לגאנט
+                <GanttChart size={14} /><span className="hidden md:inline">סיום וחזרה לגאנט</span>
               </button>
             )}
-            {mode !== "compare" && !snapId && !store.data?.teams.some((t) => store.canEditTeam(t.id)) && !store.canEditCross() && store.data && (
+            {mode !== "compare" && !snapId && !canEditSomething && store.data && (
               <span className="flex items-center gap-1 text-[12px] text-ink-400" title="אין לך הרשאות עריכה"><Lock size={12} />צפייה בלבד</span>
             )}
-            {!snapId && mode !== "compare" && live.data && (me.role === "SUPER" || me.domainIds.length > 0 || me.canEditCross) && <DeletedItemsButton data={live.data} isSuper={me.role === "SUPER"} />}
-            {!snapId && mode !== "compare" && <SaveSnapshotButton isSuper={me.role === "SUPER"} />}
+            {mode !== "compare" && !snapId && canEditSomething && (
+              <button className={clsx("btn-sm", viewOnly ? "btn-primary" : "btn-secondary")} onClick={() => setViewOnly(!viewOnly)} aria-pressed={viewOnly} data-testid="view-only-toggle"
+                title={viewOnly ? "חזרה למצב עריכה" : "צפייה בלבד: אי אפשר להוסיף או לשנות דבר — כדי לא לשנות בטעות"}>
+                {viewOnly ? <Lock size={14} /> : <Eye size={14} />}<span className="hidden md:inline">מצב צפייה בלבד</span>
+              </button>
+            )}
+            {!snapId && mode !== "compare" && mode !== "backlog" && !viewOnly && live.data && canEditSomething && <DeletedItemsButton data={live.data} isSuper={me.role === "SUPER"} />}
+            {!snapId && mode !== "compare" && mode !== "backlog" && <SaveSnapshotButton isSuper={me.role === "SUPER"} />}
           </div>
         </TopBar>
+
+        {viewOnly && !snapId && mode !== "compare" && (
+          <div className="flex items-center gap-2 border-b border-brand-100 bg-brand-50 px-4 py-1.5 text-[12.5px] text-brand-700" data-testid="view-only-banner">
+            <Lock size={14} />
+            <span>מצב צפייה בלבד פעיל — אי אפשר להוסיף או לשנות תכולות, אבני דרך, ספרינטים ושורות.</span>
+            <button className="btn-ghost btn-sm mr-auto text-brand-700 hover:bg-brand-100" onClick={() => setViewOnly(false)} data-testid="view-only-exit">
+              <Pencil size={13} />חזרה לעריכה
+            </button>
+          </div>
+        )}
+
+        {placing && (
+          <div className="flex items-center gap-2 border-b border-violet-200 bg-violet-50 px-4 py-1.5 text-[12.5px] text-violet-900" data-testid="place-banner">
+            <ListTodo size={14} />
+            <span>שיבוץ <b>&quot;{placing.name}&quot;</b> מהבאקלוג: סמן בשורה של הצוות את טווח השבועות ולחץ פעמיים (או <b>+</b> ← תכולה).</span>
+            <button className="btn-ghost btn-sm mr-auto text-violet-900 hover:bg-violet-100" onClick={() => router.push("/plan?view=backlog")} data-testid="place-cancel">ביטול וחזרה לבאקלוג</button>
+          </div>
+        )}
 
         {snapId && mode !== "compare" && (
           <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-[12.5px] text-amber-900" data-testid="snapshot-banner">
@@ -219,7 +268,7 @@ export function PlanApp({ me }: { me: Me }) {
           </div>
         )}
 
-        {data && <FilterBar data={data} view={view} setView={setView} onToday={goToday} mode={mode}
+        {data && mode !== "backlog" && <FilterBar data={data} view={view} setView={setView} onToday={goToday} mode={mode}
           onLocate={(id) => { const msg = locateItem(id, data, view, setView, mode); if (msg) toast.show("info", msg); }} />}
 
         <main className="relative min-h-0 flex-1">
@@ -227,6 +276,7 @@ export function PlanApp({ me }: { me: Me }) {
           {mode !== "compare" && store.error && <Center><div className="flex items-center gap-2 text-red-600"><AlertCircle size={16} />{store.error}</div></Center>}
           {data && mode === "gantt" && <GanttView ref={ganttRef} store={workStore} view={view} setView={setView} />}
           {data && mode === "table" && <TableView store={workStore} view={view} setView={setView} me={me} />}
+          {data && mode === "backlog" && <BacklogView store={workStore} me={me} />}
           {mode === "compare" && (
             !sideA ? (
               <Center>
@@ -252,8 +302,8 @@ export function PlanApp({ me }: { me: Me }) {
               ) : <Center><Loader2 className="animate-spin text-ink-400" /></Center>
           )}
         </main>
-        {mode !== "table" && <Legend readOnly={store.readOnly || mode === "compare"} />}
-        {mode !== "compare" && !snapId && <AddFab store={workStore} />}
+        {mode !== "table" && mode !== "backlog" && <Legend readOnly={store.readOnly || mode === "compare"} />}
+        {mode !== "compare" && mode !== "backlog" && !snapId && <AddFab store={workStore} />}
       </AppShell>
     </WorkspaceUIProvider>
   );
@@ -281,6 +331,7 @@ function Legend({ readOnly }: { readOnly: boolean }) {
         <span className="font-semibold text-ink-700">שכבות:</span>
         <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rotate-45 rounded-[2px] bg-violet-600" />אבן דרך</span>
         <span className="flex items-center gap-1"><span className="sprint-band inline-block h-3 w-5" />ספרינט (לכל התחום)</span>
+        <span className="flex items-center gap-1"><span className="flex items-center gap-0.5 rounded-sm bg-amber-400 px-1 text-[10px] font-bold leading-[14px] text-amber-950"><Link2 size={10} strokeWidth={2.5} />2</span>תלויות פתוחות</span>
       </div>
       {readOnly ? <span className="mr-auto flex items-center gap-1"><Lock size={11} />צפייה בלבד</span>
         : <span className="mr-auto">לחיצה/גרירה על שורה מסמנת טווח ואז <b>+</b> להוספה · לחיצה כפולה = תכולה · גרור קובייה להזזה · קליק ימני לאפשרויות · <span className="kbd">Ctrl+Z</span> ביטול</span>}
@@ -305,7 +356,7 @@ function SnapshotOptions({ snapshots }: { snapshots: SnapshotMeta[] }) {
 
 function SourceSelect({ snapshots, value, onChange }: { snapshots: SnapshotMeta[]; value: number | null; onChange: (id: number | null) => void }) {
   return (
-    <select className={clsx("input h-8 w-auto max-w-[260px] text-[12.5px]", value && "border-amber-400 bg-amber-50")} value={value ?? ""}
+    <select className={clsx("input h-8 w-auto max-w-[150px] text-[12.5px] md:max-w-[260px]", value && "border-amber-400 bg-amber-50")} value={value ?? ""}
       onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} data-testid="source-select" aria-label="מקור נתונים">
       <option value="">מצב נוכחי</option>
       <SnapshotOptions snapshots={snapshots} />
@@ -427,7 +478,7 @@ function SaveSnapshotButton({ isSuper }: { isSuper: boolean }) {
   };
   return (
     <>
-      <button className="btn-secondary" onClick={() => setOpen(true)} data-testid="save-snapshot"><Camera size={14} />שמור תמונת מצב</button>
+      <button className="btn-secondary" onClick={() => setOpen(true)} data-testid="save-snapshot" title="שמור תמונת מצב"><Camera size={14} /><span className="hidden md:inline">שמור תמונת מצב</span></button>
       <Dialog open={open} onClose={() => setOpen(false)} title="שמירת תמונת מצב (Snapshot)"
         footer={<><button className="btn-primary" disabled={busy} onClick={() => void submit()}>{busy ? "שומר…" : "שמירה"}</button><button className="btn-secondary" onClick={() => setOpen(false)}>ביטול</button></>}>
         <div className="space-y-3">

@@ -49,6 +49,32 @@ export function useBarFontSize(initial: UserPreferences): [number, (n: number) =
   return [v, (n) => savePrefs({ barFontSize: n })];
 }
 
+/** רוחב עמודות "תחום" ו"צוות" בגאנט — כל משתמש מרחיב אצלו בלבד (גרירת הגבול בכותרת) */
+export const GANTT_COLS = { domain: { min: 60, max: 320, def: 96 }, team: { min: 80, max: 400, def: 128 } };
+export type GanttCols = { domain: number; team: number };
+const colsOf = (p: UserPreferences | null | undefined): GanttCols => ({
+  domain: p?.ganttCols?.domain ?? GANTT_COLS.domain.def, team: p?.ganttCols?.team ?? GANTT_COLS.team.def,
+});
+export function useGanttCols(initial: UserPreferences): [GanttCols, (c: GanttCols) => void] {
+  const [v, setV] = useState<GanttCols>(() => colsOf(currentPrefs(initial)));
+  useEffect(() => {
+    const l = () => setV(colsOf(cache));
+    listeners.add(l);
+    return () => { listeners.delete(l); };
+  }, []);
+  return [v, (c) => savePrefs({ ganttCols: c })];
+}
+
+export function useViewOnly(initial: UserPreferences): [boolean, (b: boolean) => void] {
+  const [v, setV] = useState<boolean>(() => !!currentPrefs(initial).viewOnly);
+  useEffect(() => {
+    const l = () => setV(!!cache?.viewOnly);
+    listeners.add(l);
+    return () => { listeners.delete(l); };
+  }, []);
+  return [v, (b) => savePrefs({ viewOnly: b })];
+}
+
 export function useTextSize(initial: UserPreferences): [TextSize, (t: TextSize) => void] {
   const [v, setV] = useState<TextSize>(() => currentPrefs(initial).textSize ?? "md");
   useEffect(() => {

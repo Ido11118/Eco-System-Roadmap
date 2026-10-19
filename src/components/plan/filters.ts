@@ -1,4 +1,5 @@
 import type { ItemDTO, PlanData, TimeFilter, ViewConfig } from "@/lib/types";
+import { depsOf } from "@/lib/deps";
 import {
   addDays, addWeeks, currentWeekIL, monthRange, quarterRange, todayIL, weekStartOf, weekEndOf, periodWeeksWindow,
   daysDiff, HEB_MONTHS, fmtDate, type ISODate,
@@ -104,7 +105,8 @@ export function itemMatches(i: ItemDTO, v: ViewConfig, window?: [ISODate, ISODat
   if (v.priorities.length && !v.priorities.includes(i.priority)) return false;
   if (v.search.trim()) {
     const q = v.search.trim().toLowerCase();
-    if (!i.name.toLowerCase().includes(q) && !i.notes.toLowerCase().includes(q) && String(i.id) !== q) return false;
+    if (!i.name.toLowerCase().includes(q) && !i.notes.toLowerCase().includes(q) && String(i.id) !== q
+      && !depsOf(i).some((d) => d.text.toLowerCase().includes(q) || d.on.toLowerCase().includes(q))) return false;
   }
   if (window) {
     const ws = weekStartOf(window[0]);
@@ -119,9 +121,11 @@ export function hasContentFilter(v: ViewConfig) {
 
 /** צוותים מוצגים לפי סינון תחומים/צוותים */
 export function visibleTeamIds(data: PlanData, v: ViewConfig): Set<number> {
+  // צוות שהוסר ממבנה הגאנט ונשאר בסינון שמור — מתעלמים ממנו (אחרת סינון שכלל רק אותו היה מציג גאנט ריק)
+  const teamIds = v.teamIds.filter((id) => data.teams.some((t) => t.id === id));
   return new Set(data.teams.filter((t) =>
     (v.domainIds.length === 0 || v.domainIds.includes(t.domainId)) &&
-    (v.teamIds.length === 0 || v.teamIds.includes(t.id))).map((t) => t.id));
+    (teamIds.length === 0 || teamIds.includes(t.id))).map((t) => t.id));
 }
 
 // ---------------------------------------------------------------------------

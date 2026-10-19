@@ -9,10 +9,10 @@ import clsx from "clsx";
 import type { DomainDTO, TeamDTO } from "@/lib/types";
 import { currentWeekIL, weekRangeLabel, type ISODate, type Timeline } from "@/lib/weeks";
 import { useTooltip } from "@/components/ui/tooltip";
-import { uiZoom } from "@/components/plan/prefs";
-import {
-  CTRL_W, DOMAIN_W, HEADER_H, LABEL_W, MONTH_H, TEAM_W, WEEK_H, YEAR_H,
-} from "./geometry";
+import { useIsMobile } from "@/components/ui/useMobile";
+import { GANTT_COLS, uiZoom, useGanttCols, type GanttCols } from "@/components/plan/prefs";
+import { useMe } from "@/components/plan/ui";
+import { CTRL_W, HEADER_H, MONTH_H, WEEK_H, YEAR_H } from "./geometry";
 
 export type LaneSpec = {
   key: string;
@@ -61,18 +61,49 @@ export function weekIndexFromEvent(e: { clientX: number }, el: HTMLElement, week
   return Math.floor((r.right - e.clientX) / (weekW * uiZoom()));
 }
 
+const MOBILE_COLS: GanttCols = { domain: 56, team: 76 };
+
 export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttGrid(p, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const tip = useTooltip();
   const W = p.timeline.weeks.length * p.weekW;
+  // רוחב עמודות התחום/הצוות — אישי לכל משתמש. בזמן גרירה מוצג מיד, ונשמר בשחרור העכבר
+  const [savedCols, saveCols] = useGanttCols(useMe()?.preferences ?? {});
+  const [dragCols, setDragCols] = useState<GanttCols | null>(null);
+  // טלפון: עמודות תחום/צוות צרות וקבועות — כדי שציר הזמן והתכולות יקבלו את רוב הרוחב
+  const mobile = useIsMobile();
+  const cols = mobile ? MOBILE_COLS : dragCols ?? savedCols;
+  const domainW = cols.domain, teamW = cols.team, labelW = domainW + teamW + CTRL_W;
+  const startResize = (which: keyof GanttCols, e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const x0 = e.clientX, base = { ...cols }, z = uiZoom(), lim = GANTT_COLS[which];
+    let last = base;
+    // RTL: העמודה מתרחבת כשגוררים את הגבול השמאלי שלה שמאלה
+    const move = (ev: MouseEvent) => {
+      last = { ...base, [which]: Math.round(Math.max(lim.min, Math.min(lim.max, base[which] + (x0 - ev.clientX) / z))) };
+      setDragCols(last);
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
+      document.body.style.cursor = "";
+      saveCols(last); setDragCols(null);
+    };
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  };
+  const resetCol = (which: keyof GanttCols) => saveCols({ ...cols, [which]: GANTT_COLS[which].def });
+  const resizer = (which: keyof GanttCols) => (
+    <span className="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize hover:bg-brand-500/30" onMouseDown={(e) => startResize(which, e)}
+      onDoubleClick={() => resetCol(which)} title="גרירה לשינוי הרוחב (נשמר אצלך בלבד) · לחיצה כפולה לאיפוס" data-testid={`resize-${which}`} />
+  );
 
   useImperativeHandle(ref, () => ({
     el: scrollRef.current,
     scrollToIndex: (idx: number, smooth = true) => { if (scrollRef.current) scrollTo(scrollRef.current, idx, smooth); },
-  }), [p.weekW]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [p.weekW, labelW]); // eslint-disable-line react-hooks/exhaustive-deps
   /** גלילה כך שהשבוע idx יופיע בשליש הימני של המסך. RTL: scrollLeft שלילי ככל שמתקדמים שמאלה */
   function scrollTo(el: HTMLDivElement, idx: number, smooth: boolean) {
-    const visible = el.clientWidth - LABEL_W;
+    const visible = el.clientWidth - labelW;
     const target = Math.max(0, idx * p.weekW - visible / 3);
     el.scrollTo({ left: -target, behavior: smooth ? "smooth" : "auto" });
   }
@@ -98,12 +129,12 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
   return (
     <div className="relative h-full w-full">
     <div ref={scrollRef} className="gantt-scroll relative h-full w-full overflow-auto bg-white" data-testid="gantt-scroll">
-      <div style={{ width: LABEL_W + W, ["--week-w" as string]: `${p.weekW}px` }} className="relative">
+      <div style={{ width: labelW + W, ["--week-w" as string]: `${p.weekW}px`, ["--labels-w" as string]: `${labelW}px` }} className="relative">
         {/* ---------------- כותרות קפואות ---------------- */}
         <div className="sticky top-0 z-30 bg-white shadow-[0_1px_0_var(--line-strong)]">
           {/* שנה */}
           <div className="flex" style={{ height: YEAR_H }}>
-            <div className="sticky right-0 z-10 flex shrink-0 items-center border-l border-b border-ink-200 bg-[var(--header)] px-1.5" style={{ width: LABEL_W }}>
+            <div className="sticky right-0 z-10 flex shrink-0 items-center border-l border-b border-ink-200 bg-[var(--header)] px-1.5" style={{ width: labelW }}>
               {todayOk && (
                 <button className="flex h-[18px] items-center gap-1 rounded px-1.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
                   onClick={() => scrollRef.current && scrollTo(scrollRef.current, p.todayIndex, true)} data-testid="go-today" title="גלילה לשבוע הנוכחי">
@@ -115,14 +146,14 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
               {p.timeline.years.map((y) => (
                 <div key={y.key} className="absolute top-0 flex h-full items-center border-l border-ink-300 px-2 text-[12px] font-bold text-ink-700"
                   style={{ right: y.startIndex * p.weekW, width: y.count * p.weekW }}>
-                  <span className="sticky right-[248px]">{y.label}</span>
+                  <span className="sticky" style={{ right: labelW + 4 }}>{y.label}</span>
                 </div>
               ))}
             </div>
           </div>
           {/* חודש */}
           <div className="flex" style={{ height: MONTH_H }}>
-            <div className="sticky right-0 z-10 shrink-0 border-l border-b border-ink-200 bg-[var(--header)]" style={{ width: LABEL_W }} />
+            <div className="sticky right-0 z-10 shrink-0 border-l border-b border-ink-200 bg-[var(--header)]" style={{ width: labelW }} />
             <div className="relative shrink-0 border-b border-ink-200 bg-[var(--header)]" style={{ width: W }}>
               {p.timeline.months.map((m) => (
                 <div key={m.key} className="absolute top-0 flex h-full items-center justify-center overflow-hidden border-l border-ink-300 text-[12px] font-semibold text-ink-700"
@@ -134,9 +165,9 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
           </div>
           {/* שבוע */}
           <div className="flex" style={{ height: WEEK_H }}>
-            <div className="sticky right-0 z-10 flex shrink-0 items-center border-l border-b border-ink-200 bg-[var(--header)] text-[11px] font-semibold text-ink-500" style={{ width: LABEL_W }}>
-              <span className="px-2" style={{ width: DOMAIN_W }}>תחום</span>
-              <span className="px-2" style={{ width: TEAM_W }}>צוות</span>
+            <div className="sticky right-0 z-10 flex shrink-0 items-center border-l border-b border-ink-200 bg-[var(--header)] text-[11px] font-semibold text-ink-500" style={{ width: labelW }}>
+              <span className="relative self-stretch px-2 leading-[26px]" style={{ width: domainW }}>תחום{resizer("domain")}</span>
+              <span className="relative self-stretch px-2 leading-[26px]" style={{ width: teamW }}>צוות{resizer("team")}</span>
             </div>
             <div className="relative shrink-0 border-b border-ink-200 bg-[var(--header)]" style={{ width: W }}>
               {p.timeline.weeks.map((w) => {
@@ -168,7 +199,7 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
               <div key={g.kind} className="flex border-b border-ink-200" data-cross={g.kind}
                 onContextMenu={p.onLabelContextMenu ? (e) => { if (!(e.target as HTMLElement).closest(".gantt-timeline")) { e.preventDefault(); p.onLabelContextMenu!(e, g.kind === "INFLUENCE" ? -1 : -2, null); } } : undefined}>
                 <div className="sticky right-0 z-[28] flex shrink-0 items-center gap-1 border-l border-ink-200 bg-[#fbfcfe] px-2 text-[12px] font-semibold text-ink-700"
-                  style={{ width: LABEL_W, height: h }}>
+                  style={{ width: labelW, height: h }}>
                   <span className="flex-1 truncate">{g.label}</span>
                   {!g.editable && p.readOnlyHints !== false && <span className="text-[10px] font-normal text-ink-400">צפייה בלבד</span>}
                 </div>
@@ -192,9 +223,9 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
             return (
               <div key={d.id} className="relative flex border-b-2 border-ink-300" data-domain={d.id}>
                 {!merged && (
-                  <div className="sticky right-0 z-[28] shrink-0 border-l border-ink-200 bg-white" style={{ width: DOMAIN_W }} data-domain-label={d.id}
+                  <div className="sticky right-0 z-[28] shrink-0 border-l border-ink-200 bg-white" style={{ width: domainW }} data-domain-label={d.id}
                     onContextMenu={p.onLabelContextMenu ? (e) => { e.preventDefault(); p.onLabelContextMenu!(e, d.id, null); } : undefined}>
-                    <div className="sticky px-2 py-2 text-[13px] font-bold leading-tight text-ink-900" style={{ top: HEADER_H }}>{d.name}</div>
+                    <div className="sticky break-words px-1.5 py-2 text-[12px] font-bold leading-tight text-ink-900 md:px-2 md:text-[13px]" style={{ top: HEADER_H }}>{d.name}</div>
                   </div>
                 )}
                 <div className="flex flex-col">
@@ -205,10 +236,10 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
                     return (
                       <div key={t.id} className={clsx("flex", ti > 0 && "border-t border-ink-200")} data-team={t.id}>
                         <div className={clsx("group/team sticky z-[28] shrink-0 border-l border-ink-200 bg-white", merged ? "right-0" : "")}
-                          style={{ width: merged ? DOMAIN_W + TEAM_W : TEAM_W, right: merged ? 0 : DOMAIN_W }} data-team-label={t.id}
+                          style={{ width: merged ? domainW + teamW : teamW, right: merged ? 0 : domainW }} data-team-label={t.id}
                           onContextMenu={p.onLabelContextMenu ? (e) => { e.preventDefault(); p.onLabelContextMenu!(e, d.id, merged ? null : t.id); } : undefined}>
-                          <div className="sticky flex items-start gap-1 px-2 py-2" style={{ top: HEADER_H }}>
-                            <span className={clsx("flex-1 leading-tight", merged ? "text-[13px] font-bold text-ink-900" : "text-[12.5px] font-medium text-ink-700")}>{t.name}</span>
+                          <div className="sticky flex items-start gap-1 px-1.5 py-2 md:px-2" style={{ top: HEADER_H }}>
+                            <span className={clsx("min-w-0 flex-1 break-words leading-tight", merged ? "text-[12px] font-bold text-ink-900 md:text-[13px]" : "text-[11.5px] font-medium text-ink-700 md:text-[12.5px]")}>{t.name}</span>
                             {p.teamLabelExtra?.(t.id)}
                           </div>
                           {!editable && p.readOnlyHints !== false && <div className="absolute bottom-1 right-2 text-[10px] text-ink-400">צפייה בלבד</div>}
@@ -217,7 +248,7 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
                           {lanes.map((lane) => (
                             <div key={lane.key} className={clsx("flex", lane.isRowStart && lane.rowIndex > 0 && "border-t border-ink-100", lane.virtual && !lane.isRowStart && "border-t border-dashed border-ink-100")}>
                               <div className="group/row sticky z-[28] shrink-0 border-l border-ink-200 bg-white"
-                                style={{ width: CTRL_W, right: DOMAIN_W + TEAM_W, height: lane.height }}>
+                                style={{ width: CTRL_W, right: domainW + teamW, height: lane.height }}>
                                 {p.renderRowControl?.(lane, t.id)}
                               </div>
                               <div data-lane-row={lane.rowId} data-lane-team={t.id} data-editable={lane.editable ? "1" : "0"}
@@ -251,14 +282,14 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
             );
           })}
           {/* עמודת השבוע הנוכחי וגבולות חודשים */}
-          <BodyOverlay timeline={p.timeline} weekW={p.weekW} todayIndex={todayOk ? p.todayIndex : -1} />
+          <BodyOverlay timeline={p.timeline} weekW={p.weekW} todayIndex={todayOk ? p.todayIndex : -1} labelW={labelW} />
           {p.renderBodyOverlay && (
-            <div className="pointer-events-none absolute inset-y-0 z-[6]" style={{ right: LABEL_W, width: W }}>{p.renderBodyOverlay(0)}</div>
+            <div className="pointer-events-none absolute inset-y-0 z-[6]" style={{ right: labelW, width: W }}>{p.renderBodyOverlay(0)}</div>
           )}
         </div>
       </div>
     </div>
-    <ScrollArrows scrollRef={scrollRef} weekW={p.weekW} />
+    <ScrollArrows scrollRef={scrollRef} weekW={p.weekW} labelW={labelW} />
     </div>
   );
 }));
@@ -267,7 +298,7 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
  * חיצי גלילה אופקית בצדי הגאנט. מוצגים רק כשיש לאן לגלול, ומחזיקים מצב משלהם (בלי לרנדר מחדש את הגאנט).
  * RTL: scrollLeft = 0 בקצה הימני (תחילת ציר הזמן) ושלילי שמאלה. החץ הימני ← מוקדם יותר, השמאלי ← מאוחר יותר.
  */
-function ScrollArrows({ scrollRef, weekW }: { scrollRef: React.RefObject<HTMLDivElement | null>; weekW: number }) {
+function ScrollArrows({ scrollRef, weekW, labelW }: { scrollRef: React.RefObject<HTMLDivElement | null>; weekW: number; labelW: number }) {
   const [can, setCan] = useState({ earlier: false, later: false });
   useEffect(() => {
     const el = scrollRef.current;
@@ -286,7 +317,7 @@ function ScrollArrows({ scrollRef, weekW }: { scrollRef: React.RefObject<HTMLDiv
   const step = (dir: 1 | -1) => {
     const el = scrollRef.current;
     if (!el) return;
-    const visible = el.clientWidth - LABEL_W;
+    const visible = el.clientWidth - labelW;
     const delta = Math.max(weekW * 4, Math.round((visible * 0.7) / weekW) * weekW); // ~70% מהמסך, מיושר לשבועות
     el.scrollBy({ left: dir * delta, behavior: "smooth" });
   };
@@ -294,7 +325,7 @@ function ScrollArrows({ scrollRef, weekW }: { scrollRef: React.RefObject<HTMLDiv
   return (
     <>
       {can.earlier && (
-        <button className={btn} style={{ right: LABEL_W + 10 }} onClick={() => step(1)} aria-label="גלילה לתקופה מוקדמת יותר" title="מוקדם יותר" data-testid="scroll-earlier">
+        <button className={btn} style={{ right: labelW + 10 }} onClick={() => step(1)} aria-label="גלילה לתקופה מוקדמת יותר" title="מוקדם יותר" data-testid="scroll-earlier">
           <ChevronRight size={20} />
         </button>
       )}
@@ -307,9 +338,9 @@ function ScrollArrows({ scrollRef, weekW }: { scrollRef: React.RefObject<HTMLDiv
   );
 }
 
-function BodyOverlay({ timeline, weekW, todayIndex }: { timeline: Timeline; weekW: number; todayIndex: number }) {
+function BodyOverlay({ timeline, weekW, todayIndex, labelW }: { timeline: Timeline; weekW: number; todayIndex: number; labelW: number }) {
   return (
-    <div className="pointer-events-none absolute inset-y-0 z-[5]" style={{ right: LABEL_W, width: timeline.weeks.length * weekW }}>
+    <div className="pointer-events-none absolute inset-y-0 z-[5]" style={{ right: labelW, width: timeline.weeks.length * weekW }}>
       {timeline.months.map((m) => m.startIndex > 0 && (
         <div key={m.key} className="absolute inset-y-0 w-px bg-ink-200" style={{ right: m.startIndex * weekW }} />
       ))}

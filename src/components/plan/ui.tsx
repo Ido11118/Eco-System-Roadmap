@@ -1,10 +1,11 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { X, Trash2, History, Info, AlertTriangle, Lock, Diamond, Flag } from "lucide-react";
+import { X, Trash2, History, Info, AlertTriangle, Lock, Diamond, Flag, GanttChartSquare } from "lucide-react";
 import { api } from "@/lib/api";
-import type { ItemDTO, Me, MilestoneDTO, PlanData, SprintDTO } from "@/lib/types";
+import type { BacklogDTO, ItemDTO, Me, MilestoneDTO, PlanData, SprintDTO } from "@/lib/types";
 import {
   CROSS_ROW_LABELS, DELETED_RETENTION_DAYS,
 } from "@/lib/constants";
@@ -15,8 +16,13 @@ import { msCanEdit, msScopeValue, parseMsScope } from "@/lib/milestone";
 import { WeekPicker } from "./WeekPicker";
 import { useCatalog } from "@/components/CatalogProvider";
 import type { PlanStore } from "./store";
+import { DependenciesEditor } from "./Dependencies";
 
-type NewItemPrefill = { teamId?: number | null; rowId?: number; startWeek?: ISODate; endWeek?: ISODate; name?: string; status?: string };
+type NewItemPrefill = {
+  teamId?: number | null; rowId?: number; startWeek?: ISODate; endWeek?: ISODate; name?: string; status?: string; priority?: string; notes?: string;
+  /** "העברה לגאנט" של פריט מהבאקלוג (onGantt: נפתח מתוך בחירת טווח על הגאנט) */
+  backlog?: { id: number; version: number; onGantt?: boolean };
+};
 type MsPrefill = { teamId?: number | null; domainId?: number | null; date?: ISODate };
 type SprintPrefill = { domainId?: number; startDate?: ISODate; endDate?: ISODate; name?: string };
 
@@ -27,6 +33,8 @@ type UI = {
   openNewItem: (p?: NewItemPrefill) => void;
   openMilestone: (m: MilestoneDTO | null, prefill?: MsPrefill) => void;
   openSprint: (s: SprintDTO | null, prefill?: SprintPrefill) => void;
+  /** משבצים כרגע פריט מהבאקלוג על הגאנט */
+  placing: BacklogDTO | null;
 };
 const UICtx = createContext<UI | null>(null);
 /** המשתמש המחובר (בתוך מסכי העבודה) */
@@ -117,7 +125,12 @@ function TargetSelect({ data, store, value, onChange }: {
   );
 }
 
-export function WorkspaceUIProvider({ store, me, children }: { store: PlanStore; me: Me; children: React.ReactNode }) {
+export function WorkspaceUIProvider({ store, me, children, placing, onScheduled }: {
+  store: PlanStore; me: Me; children: React.ReactNode;
+  /** פריט מהבאקלוג שמשבצים כרגע על הגאנט: כל "הוספת תכולה" (מסימון טווח) תמלא את פרטיו */
+  placing?: BacklogDTO | null;
+  onScheduled?: (it: ItemDTO, onGantt: boolean) => void;
+}) {
   const [itemId, setItemId] = useState<number | null>(null);
   const [newItem, setNewItem] = useState<NewItemPrefill | null>(null);
   const [ms, setMs] = useState<{ m: MilestoneDTO | null; prefill?: MsPrefill } | null>(null);
@@ -126,15 +139,20 @@ export function WorkspaceUIProvider({ store, me, children }: { store: PlanStore;
     me,
     openItem: (id) => setItemId(id),
     selectedItemId: itemId,
-    openNewItem: (p) => setNewItem(p ?? {}),
+    openNewItem: (p) => setNewItem(placing && !p?.backlog
+      ? { ...p, teamId: p?.teamId ?? placing.teamId, name: placing.name, priority: placing.priority, notes: placing.notes, backlog: { id: placing.id, version: placing.version, onGantt: true } }
+      : p ?? {}),
     openMilestone: (m, prefill) => setMs({ m, prefill }),
     openSprint: (s, prefill) => setSp({ s, prefill }),
-  }), [itemId, me]);
+    placing: placing ?? null,
+  }), [itemId, me, placing]);
   return (
     <UICtx.Provider value={ui}>
       {children}
       {itemId !== null && <ItemPanel key={itemId} store={store} id={itemId} onClose={() => setItemId(null)} />}
-      {newItem && <NewItemDialog store={store} prefill={newItem} onClose={() => setNewItem(null)} onCreated={(it) => { setNewItem(null); if (it) setItemId(it.id); }} />}
+      {newItem && <NewItemDialog store={store} prefill={newItem} onClose={() => setNewItem(null)}
+        onCreated={(it) => { setNewItem(null); if (it) setItemId(it.id); }}
+        onScheduled={(it) => { setNewItem(null); onScheduled?.(it, !!newItem.backlog?.onGantt); }} />}
       {ms && <MilestoneDialog store={store} m={ms.m} prefill={ms.prefill} onClose={() => setMs(null)} />}
       {sp && <SprintDialog store={store} s={sp.s} prefill={sp.prefill} onClose={() => setSp(null)} />}
       <span hidden data-me={me.id} />
@@ -205,7 +223,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
       </div>
       {!editable && (
         <div className="mx-5 mt-3 flex items-center gap-2 rounded-md bg-ink-50 px-3 py-2 text-[12px] text-ink-500">
-          <Lock size={13} /> {store.readOnly ? "תצוגת Snapshot — צפייה בלבד" : "אין לך הרשאת עריכה לתחום זה — צפייה בלבד"}
+          <Lock size={13} /> {store.readOnly ? (store.kind === "live" ? "מצב צפייה בלבד פעיל — לעריכה כבה אותו בסרגל העליון" : "תצוגת Snapshot — צפייה בלבד") : "אין לך הרשאת עריכה לתחום זה — צפייה בלבד"}
         </div>
       )}
       {store.kind === "live" && (
@@ -220,7 +238,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
       <div className="flex-1 overflow-auto px-5 py-4">
         {tab === "details" ? (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <label className="label" htmlFor="p-status">סטטוס</label>
                 <StatusSelect id="p-status" value={item.status} disabled={!editable} onChange={(s) => void save({ status: s })} />
@@ -251,6 +269,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
               <textarea id="p-notes" className="input min-h-[110px]" disabled={!editable} value={notes} placeholder={editable ? "הוסף הערה…" : ""}
                 onChange={(e) => { dirtyNotes.current = true; setNotes(e.target.value); }} onBlur={() => { dirtyNotes.current = false; if (notes !== item.notes) void save({ notes }); }} />
             </div>
+            <DependenciesEditor item={item} data={data} editable={editable} onChange={(dependencies) => void save({ dependencies })} />
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-lg bg-ink-50 px-3 py-2.5 text-[12px]">
               <dt className="text-ink-500">נוצר על ידי</dt><dd>{userName(data, item.createdById)} · {fmtTs(item.createdAt)}</dd>
               <dt className="text-ink-500">עודכן לאחרונה</dt><dd>{userName(data, item.updatedById)} · {fmtTs(item.updatedAt)}</dd>
@@ -295,10 +314,13 @@ function ItemHistory({ id }: { id: number }) {
 // ---------------------------------------------------------------------------
 // הוספת תכולה
 // ---------------------------------------------------------------------------
-function NewItemDialog({ store, prefill, onClose, onCreated }: {
-  store: PlanStore; prefill: NewItemPrefill; onClose: () => void; onCreated: (it: ItemDTO | null) => void;
+function NewItemDialog({ store, prefill, onClose, onCreated, onScheduled }: {
+  store: PlanStore; prefill: NewItemPrefill; onClose: () => void; onCreated: (it: ItemDTO | null) => void; onScheduled: (it: ItemDTO) => void;
 }) {
   const data = store.data!;
+  const router = useRouter();
+  const qc = useQueryClient();
+  const bl = prefill.backlog;
   const toast = useToast();
   const cat = useCatalog();
   const initialTarget = (() => {
@@ -314,7 +336,7 @@ function NewItemDialog({ store, prefill, onClose, onCreated }: {
   const cw = currentWeekIL();
   const [f, setF] = useState({
     name: prefill.name ?? "", startWeek: prefill.startWeek ?? cw, endWeek: prefill.endWeek ?? prefill.startWeek ?? cw,
-    status: prefill.status ?? cat.defaultStatus, priority: cat.defaultPriority, notes: "",
+    status: prefill.status ?? cat.defaultStatus, priority: prefill.priority ?? cat.defaultPriority, notes: prefill.notes ?? "",
   });
   const [busy, setBusy] = useState(false);
   const teamId = target.startsWith("team:") ? Number(target.slice(5)) : null;
@@ -336,9 +358,18 @@ function NewItemDialog({ store, prefill, onClose, onCreated }: {
       if (free) rowId = free.id; else { rowId = await store.createRow(teamId!); createdRow = true; }
     } else rowId = Number(rowChoice);
     if (!rowId) { setBusy(false); return; }
-    const it = await store.createItem({ rowId, name: f.name.trim(), startWeek: f.startWeek, endWeek: f.endWeek, status: f.status, priority: f.priority, notes: f.notes });
+    const v = { rowId, name: f.name.trim(), startWeek: f.startWeek, endWeek: f.endWeek, status: f.status, priority: f.priority, notes: f.notes };
+    let it: ItemDTO | null = null;
+    if (bl) {
+      // העברה מהבאקלוג: בשרת, בטרנזקציה אחת — נוצרת תכולה והפריט יוצא מהבאקלוג
+      try {
+        it = await api<ItemDTO>("POST", `/api/backlog/${bl.id}/schedule`, { version: bl.version, item: v });
+        store.refresh();
+        void qc.invalidateQueries({ queryKey: ["backlog"] });
+      } catch (er) { toast.show("error", (er as Error).message); }
+    } else it = await store.createItem(v);
     setBusy(false);
-    if (it) onCreated(it);
+    if (it) { if (bl) onScheduled(it); else onCreated(it); }
     else if (createdRow) { // היצירה נכשלה — לא משאירים שורה ריקה שנוצרה עבורה
       const row = store.data?.rows.find((r) => r.id === rowId);
       if (row) await store.deleteRow(row, { silent: true });
@@ -346,17 +377,33 @@ function NewItemDialog({ store, prefill, onClose, onCreated }: {
   }
 
   return (
-    <Dialog open onClose={onClose} title="הוספת תכולה" width={520}
+    <Dialog open onClose={onClose} title={bl ? "העברה לגאנט" : "הוספת תכולה"} width={520}
       footer={<>
-        <button className="btn-primary" form="new-item-form" disabled={busy}>{busy ? "שומר…" : "הוספה"}</button>
-        <button className="btn-secondary" onClick={onClose}>ביטול</button>
+        <button className="btn-primary" form="new-item-form" disabled={busy} data-testid="new-item-submit">{busy ? "שומר…" : bl ? "העברה לגאנט" : "הוספה"}</button>
+        {bl && !bl.onGantt && (
+          <button className="btn-secondary" onClick={() => { onClose(); router.push(`/plan?view=gantt&place=${bl.id}`); }} data-testid="pick-on-gantt"
+            title="מעבר לגאנט: מסמנים את טווח השבועות ישירות בשורה של הצוות">
+            <GanttChartSquare size={14} />בחירה על גבי הגאנט
+          </button>
+        )}
+        <button className="btn-ghost" onClick={onClose}>ביטול</button>
       </>}>
       <form id="new-item-form" onSubmit={submit} className="space-y-3.5">
+        {bl && (
+          <p className="flex items-start gap-1.5 rounded-md bg-brand-50 px-3 py-2 text-[12.5px] text-brand-700">
+            <Info size={14} className="mt-0.5 shrink-0" />בחר שבוע התחלה וסיום. הפריט ייצא מהבאקלוג ויוצג בגאנט ובדף התכולות לכל המשתמשים.
+          </p>
+        )}
+        {bl && !target && (
+          <p className="flex items-center gap-1.5 text-[12.5px] font-medium text-amber-700" data-testid="schedule-need-team">
+            <AlertTriangle size={14} />לפריט לא נבחר צוות בבאקלוג — יש לבחור צוות כדי להעביר לגאנט
+          </p>
+        )}
         <div>
           <label className="label" htmlFor="ni-name">שם התכולה *</label>
           <input id="ni-name" className="input" data-autofocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="לדוגמה: מודול דוחות" />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="label">תחום / צוות *</label>
             <TargetSelect data={data} store={store} value={target} onChange={(v) => { setTarget(v); setRowChoice("auto"); }} />
@@ -370,11 +417,11 @@ function NewItemDialog({ store, prefill, onClose, onCreated }: {
             </select>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div><label className="label">שבוע התחלה</label><WeekPicker value={f.startWeek} onChange={(v) => setF({ ...f, startWeek: v, endWeek: f.endWeek < v ? v : f.endWeek })} /></div>
           <div><label className="label">שבוע סיום</label><WeekPicker value={f.endWeek} min={f.startWeek} onChange={(v) => setF({ ...f, endWeek: v })} /></div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div><label className="label">סטטוס</label><StatusSelect value={f.status} onChange={(s) => setF({ ...f, status: s })} /></div>
           <div><label className="label">תיעדוף</label><PrioritySelect value={f.priority} onChange={(p) => setF({ ...f, priority: p })} /></div>
         </div>
@@ -439,7 +486,7 @@ function MilestoneDialog({ store, m, prefill, onClose }: { store: PlanStore; m: 
       <form id="ms-form" onSubmit={submit} className="space-y-3">
         <fieldset disabled={!editable} className="space-y-3">
           <div><label className="label">שם *</label><input className="input" data-autofocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="לדוגמה: הצגת תוכנית רבעונית" /></div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div><label className="label">תאריך *</label><input type="date" className="input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
             <div><label className="label">שיוך</label><ScopeSelect data={data} store={store} value={f.scope} onChange={(v) => setF({ ...f, scope: v })} /></div>
           </div>
@@ -484,7 +531,7 @@ function SprintDialog({ store, s, prefill, onClose }: { store: PlanStore; s: Spr
       </> : <button className="btn-secondary" onClick={onClose}>סגירה</button>}>
       <form id="sp-form" onSubmit={submit}>
         <fieldset disabled={!editable} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div><label className="label">שם *</label><input className="input" data-autofocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Sprint 12" /></div>
             <div>
               <label className="label">תחום *</label>
@@ -494,7 +541,7 @@ function SprintDialog({ store, s, prefill, onClose }: { store: PlanStore; s: Spr
               <p className="mt-1 text-[11px] text-ink-400">הספרינט חל על כל הצוותים בתחום.</p>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div><label className="label">תאריך התחלה</label><input type="date" className="input" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} /></div>
             <div><label className="label">תאריך סיום</label><input type="date" className="input" value={f.endDate} min={f.startDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} /></div>
           </div>

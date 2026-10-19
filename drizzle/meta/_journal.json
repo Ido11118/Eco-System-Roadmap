@@ -64,6 +64,41 @@
       "when": 1792260041917,
       "tag": "0008_milestones_domain",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792324956619,
+      "tag": "0009_teams_archive",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792442961549,
+      "tag": "0010_item_dependencies",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792445014555,
+      "tag": "0011_backlog",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792445540371,
+      "tag": "0012_backlog_domain",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792445997576,
+      "tag": "0013_backlog_shared_ids",
+      "breakpoints": true
     }
   ]
 }

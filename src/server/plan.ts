@@ -4,7 +4,7 @@ import { db, type Tx } from "@/db";
 import {
   auditLogs, domains, milestones, sprints, teams, users, workItems, workRows,
 } from "@/db/schema";
-import type { ItemDTO, Me, MilestoneDTO, PlanData, RowDTO, SprintDTO } from "@/lib/types";
+import type { Dependency, ItemDTO, Me, MilestoneDTO, PlanData, RowDTO, SprintDTO } from "@/lib/types";
 import { ApiError } from "./errors";
 import { loadCatalog } from "./catalog";
 import { DELETED_RETENTION_DAYS } from "@/lib/constants";
@@ -19,7 +19,7 @@ const iso = (d: Date | null) => (d ? d.toISOString() : "");
 export function itemToDTO(i: typeof workItems.$inferSelect): ItemDTO {
   return {
     id: i.id, name: i.name, rowId: i.rowId, teamId: i.teamId, startWeek: i.startWeek, endWeek: i.endWeek,
-    status: i.status, priority: i.priority, notes: i.notes, version: i.version,
+    status: i.status, priority: i.priority, notes: i.notes, dependencies: i.dependencies ?? [], version: i.version,
     createdAt: iso(i.createdAt), createdById: i.createdById, updatedAt: iso(i.updatedAt), updatedById: i.updatedById,
   };
 }
@@ -43,7 +43,7 @@ export function sprintToDTO(s: typeof sprints.$inferSelect): SprintDTO {
 export async function loadPlan(q: Tx | typeof db = db): Promise<PlanData> {
   const [d, t, r, i, m, s, u] = await Promise.all([
     q.select().from(domains).orderBy(asc(domains.sortOrder)),
-    q.select().from(teams).orderBy(asc(teams.sortOrder)),
+    q.select().from(teams).where(isNull(teams.archivedAt)).orderBy(asc(teams.sortOrder)), // צוותים שהוסרו — לא מוצגים
     q.select().from(workRows).where(isNull(workRows.deletedAt)).orderBy(asc(workRows.sortOrder)),
     q.select().from(workItems).where(isNull(workItems.deletedAt)).orderBy(asc(workItems.id)),
     q.select().from(milestones).where(isNull(milestones.deletedAt)).orderBy(asc(milestones.date)),
@@ -52,7 +52,11 @@ export async function loadPlan(q: Tx | typeof db = db): Promise<PlanData> {
     q.select({ id: users.id, fullName: users.fullName }).from(users).where(isNotNull(users.approvedAt)),
   ]);
   return {
-    domains: d.map((x) => ({ id: x.id, key: x.key, name: x.name, sortOrder: x.sortOrder, isSingleTeam: x.isSingleTeam })),
+    // "תחום שהוא גם הצוות": מחושב מהצוותים הפעילים (ולא מהערך השמור) — כך הוספת צוות לתחום כזה מפצלת אותו מיד
+    domains: d.map((x) => {
+      const ts = t.filter((y) => y.domainId === x.id);
+      return { id: x.id, key: x.key, name: x.name, sortOrder: x.sortOrder, isSingleTeam: ts.length === 1 && ts[0].name === x.name };
+    }),
     teams: t.map((x) => ({ id: x.id, key: x.key, name: x.name, domainId: x.domainId, sortOrder: x.sortOrder })),
     rows: r.map(rowToDTO),
     items: i.map(itemToDTO),
@@ -68,8 +72,8 @@ export async function loadPlan(q: Tx | typeof db = db): Promise<PlanData> {
 
 // שאילתה בכל בדיקה (טבלה זעירה) — ללא מטמון שעלול להתיישן אחרי שינוי מבנה ארגוני
 async function teamDomain(teamId: number): Promise<number> {
-  const [t] = await db.select({ d: teams.domainId }).from(teams).where(eq(teams.id, teamId));
-  if (!t) throw new ApiError(400, "צוות לא קיים");
+  const [t] = await db.select({ d: teams.domainId }).from(teams).where(and(eq(teams.id, teamId), isNull(teams.archivedAt)));
+  if (!t) throw new ApiError(400, "הצוות לא קיים (ייתכן שהוסר ממבנה הגאנט)");
   return t.d;
 }
 
@@ -112,20 +116,37 @@ export async function audit(
 function diff<T extends Record<string, unknown>>(before: T, patch: Partial<T>) {
   const out: Record<string, { from: unknown; to: unknown }> = {};
   for (const k of Object.keys(patch)) {
-    if (patch[k] !== undefined && before[k] !== patch[k]) out[k] = { from: before[k], to: patch[k] };
+    const same = typeof patch[k] === "object" && patch[k] !== null ? JSON.stringify(before[k]) === JSON.stringify(patch[k]) : before[k] === patch[k];
+    if (patch[k] !== undefined && !same) out[k] = { from: before[k], to: patch[k] };
   }
   return out;
 }
 
 const FIELD_LABELS: Record<string, string> = {
   name: "שם", status: "סטטוס", priority: "תיעדוף", notes: "הערות", startWeek: "שבוע התחלה", endWeek: "שבוע סיום",
-  rowId: "שורה", teamId: "צוות", date: "תאריך", startDate: "תאריך התחלה", endDate: "תאריך סיום",
+  dependencies: "תלויות", rowId: "שורה", teamId: "צוות", date: "תאריך", startDate: "תאריך התחלה", endDate: "תאריך סיום",
 };
 function summarizeDiff(d: Record<string, { from: unknown; to: unknown }>, cat?: Catalog) {
   return Object.entries(d).map(([k, v]) => {
+    if (k === "dependencies") return describeDeps((v.from ?? []) as Dependency[], (v.to ?? []) as Dependency[]);
     const fmt = (x: unknown) => k === "status" ? (cat?.status(String(x)).label ?? String(x)) : k === "priority" ? (cat?.priority(String(x)).label ?? String(x)) : k === "notes" ? "…" : String(x);
     return `${FIELD_LABELS[k] ?? k}: ${fmt(v.from)} ← ${fmt(v.to)}`;
   }).join(" · ");
+}
+
+/** תיאור קריא של שינוי ברשימת התלויות (להיסטוריית השינויים) */
+function describeDeps(from: Dependency[], to: Dependency[]) {
+  const parts: string[] = [];
+  const q = (x: Dependency) => `"${x.text}"`;
+  for (const x of to) {
+    const p = from.find((f) => f.id === x.id);
+    if (!p) parts.push(`נוספה תלות ${q(x)}${x.on ? ` מול ${x.on}` : ""}`);
+    else if (!p.done && x.done) parts.push(`תלות ${q(x)} סומנה כטופלה`);
+    else if (p.done && !x.done) parts.push(`תלות ${q(x)} נפתחה מחדש`);
+    else if (p.text !== x.text || p.on !== x.on) parts.push(`תלות ${q(x)} עודכנה`);
+  }
+  for (const p of from) if (!to.some((x) => x.id === p.id)) parts.push(`הוסרה תלות ${q(p)}`);
+  return parts.join(" · ") || "התלויות עודכנו";
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +230,9 @@ async function assertNoOverlap(tx: Tx, rowId: number, rowKind: string, start: st
 
 export type ItemInput = {
   rowId: number; name: string; startWeek: string; endWeek: string;
-  status?: string; priority?: string; notes?: string;
+  status?: string; priority?: string; notes?: string; dependencies?: Dependency[];
+  /** מזהה קבוע (פנימי בלבד — מעבר מהבאקלוג שומר את המזהה; לא נחשף ב-API) */
+  id?: number;
 };
 
 /** סטטוס/תיעדוף חייבים להיות בקטלוג — הודעה ברורה במקום שגיאת מפתח זר */
@@ -219,25 +242,27 @@ function assertInCatalog(cat: Catalog, v: { status?: string; priority?: string }
   if (v.priority !== undefined && !cat.priorities.some((p) => p.key === v.priority)) throw new ApiError(400, "תיעדוף לא קיים (ייתכן שנמחק ע\"י מנהל המערכת). רענן את הדף.");
 }
 
-export async function createItem(me: Me, input: ItemInput) {
+export async function createItem(me: Me, input: ItemInput, tx0?: Tx) {
   const cat = await loadCatalog();
   assertInCatalog(cat, input);
-  return db.transaction(async (tx) => {
+  const run = async (tx: Tx) => {
     const row = await getRowForUpdate(tx, input.rowId);
     await assertRow(me, row);
     await assertNoOverlap(tx, row.id, row.kind, input.startWeek, input.endWeek);
     const [it] = await tx.insert(workItems).values({
+      ...(input.id ? { id: input.id } : {}),
       name: input.name, rowId: row.id, teamId: row.teamId, startWeek: input.startWeek, endWeek: input.endWeek,
       status: input.status ?? cat.defaultStatus, priority: input.priority ?? cat.defaultPriority, notes: input.notes ?? "",
-      createdById: me.id, updatedById: me.id,
+      dependencies: input.dependencies ?? [], createdById: me.id, updatedById: me.id,
     }).returning();
     await audit(tx, me.id, "item", it.id, "create", { name: it.name, startWeek: it.startWeek, endWeek: it.endWeek, status: it.status }, `נוצרה תכולה "${it.name}"`);
     return itemToDTO(it);
-  });
+  };
+  return tx0 ? run(tx0) : db.transaction(run);
 }
 
 export type ItemPatch = Partial<{
-  name: string; status: string; priority: string; notes: string; startWeek: string; endWeek: string; rowId: number;
+  name: string; status: string; priority: string; notes: string; dependencies: Dependency[]; startWeek: string; endWeek: string; rowId: number;
 }>;
 
 export async function updateItem(me: Me, id: number, version: number, patch: ItemPatch, tx0?: Tx, cat0?: Catalog) {
@@ -353,12 +378,13 @@ export async function listDeletedItems(me: Me) {
     .from(workItems).innerJoin(workRows, eq(workRows.id, workItems.rowId)).leftJoin(users, eq(users.id, workItems.deletedById))
     .where(and(sql`${workItems.deletedAt} is not null`, sql`${workItems.deletedAt} > ${since}`))
     .orderBy(sql`${workItems.deletedAt} desc`).limit(300);
-  const teamDomains = new Map((await db.select({ id: teams.id, d: teams.domainId }).from(teams)).map((t) => [t.id, t.d]));
+  // רק צוותים פעילים: תכולה של צוות שהוסר ממבנה הגאנט לא ניתנת לשחזור (אין לאן להחזיר אותה)
+  const teamDomains = new Map((await db.select({ id: teams.id, d: teams.domainId }).from(teams).where(isNull(teams.archivedAt))).map((t) => [t.id, t.d]));
   // מוצגות רק תכולות שהמשתמש מורשה לשחזר (תחומים שיש לו הרשאת עריכה אליהם; רוחבי — רק עם הרשאה רוחבית)
   return rows
     .map((r) => ({
       ...itemToDTO(r.i), deletedAt: r.i.deletedAt!.toISOString(), deletedBy: r.deletedBy ?? "—", rowKind: r.kind,
-      canRestore: r.kind === "TEAM" ? me.role === "SUPER" || me.domainIds.includes(teamDomains.get(r.rowTeam!) ?? -1) : canEditCross(me),
+      canRestore: r.kind === "TEAM" ? teamDomains.has(r.rowTeam!) && (me.role === "SUPER" || me.domainIds.includes(teamDomains.get(r.rowTeam!)!)) : canEditCross(me),
     }))
     .filter((r) => r.canRestore);
 }
