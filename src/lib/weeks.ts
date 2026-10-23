@@ -78,28 +78,33 @@ export function currentWeekIL(now: Date = new Date()): ISODate {
   return weekStartOf(todayIL(now));
 }
 
-export function firstSundayOfYear(year: number): ISODate {
-  const jan1 = `${year}-01-01`;
-  const dow = dayOfWeek(jan1);
-  return addDays(jan1, dow === 0 ? 0 : 7 - dow);
+/**
+ * מספור השבועות בארגון: שבוע 1 של שנה הוא השבוע (ראשון–שבת) שבו חל ה-1 בינואר.
+ * כלומר שבוע שחוצה שנה שייך (במספור) לשנה החדשה — לשנה של יום השבת שלו.
+ * דוגמה: 28/12/2025–03/01/2026 = שבוע 1 של 2026; 18/10/2026–24/10/2026 = שבוע 43.
+ * (עד 10/2026 הוגדר בטעות "השבוע שמתחיל ביום ראשון הראשון של השנה" — ראה scripts/fixes/weekNumbering.ts)
+ */
+export function weekYearStart(year: number): ISODate {
+  return weekStartOf(`${year}-01-01`);
 }
 
+/** שנת המספור של השבוע: השנה של יום השבת שלו */
 export function weekYear(sunday: ISODate): number {
-  return Number(sunday.slice(0, 4));
+  return Number(weekEndOf(sunday).slice(0, 4));
 }
 
+/** חודש השבוע לכותרות הגאנט: החודש שבו חל יום ראשון שלו */
 export function weekMonth(sunday: ISODate): number {
-  return Number(sunday.slice(5, 7)) - 1; // 0-11
+  return Number(weekStartOf(sunday).slice(5, 7)) - 1; // 0-11
 }
 
 export function weekNumber(sunday: ISODate): number {
-  const y = weekYear(sunday);
-  return weeksDiff(firstSundayOfYear(y), sunday) + 1;
+  return weeksDiff(weekYearStart(weekYear(sunday)), weekStartOf(sunday)) + 1;
 }
 
 /** המרת (שנה, מספר שבוע) לתאריך יום ראשון */
 export function sundayOfWeekNumber(year: number, num: number): ISODate {
-  return addWeeks(firstSundayOfYear(year), num - 1);
+  return addWeeks(weekYearStart(year), num - 1);
 }
 
 export function fmtDate(s: ISODate): string {
@@ -144,7 +149,8 @@ export function buildTimeline(from: ISODate, to: ISODate): Timeline {
   const last = weekStartOf(to);
   const weeks: TimelineWeek[] = [];
   for (let s = first, i = 0; s <= last; s = addWeeks(s, 1), i++) {
-    weeks.push({ index: i, start: s, end: weekEndOf(s), num: weekNumber(s), year: weekYear(s), month: weekMonth(s) });
+    // כותרות שנה/חודש — לפי יום ראשון של השבוע (כמו קודם); המספר — לפי מספור הארגון (שבוע 1 יכול להתחיל בדצמבר)
+    weeks.push({ index: i, start: s, end: weekEndOf(s), num: weekNumber(s), year: Number(s.slice(0, 4)), month: weekMonth(s) });
   }
   const years: TimelineGroup[] = [];
   const months: TimelineGroup[] = [];

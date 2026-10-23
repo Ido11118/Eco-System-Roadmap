@@ -11,20 +11,26 @@ describe("weeks", () => {
     // שבת 23:30 UTC = ראשון 02:30 בישראל (שעון קיץ) — כבר שבוע חדש
     expect(W.currentWeekIL(new Date("2026-10-10T23:30:00Z"))).toBe("2026-10-11");
   });
-  it("week numbering by Sunday's year", () => {
-    expect(W.firstSundayOfYear(2026)).toBe("2026-01-04");
-    expect(W.weekNumber("2026-01-04")).toBe(1);
-    expect(W.weekNumber("2025-12-28")).toBe(52);
-    expect(W.weekYear("2025-12-28")).toBe(2025);
-    expect(W.sundayOfWeekNumber(2026, 40)).toBe("2026-10-04");
+  it("org week numbering: week 1 is the week that contains January 1st", () => {
+    expect(W.weekYearStart(2026)).toBe("2025-12-28");
+    expect(W.weekNumber("2025-12-28")).toBe(1); // 28/12/2025–03/01/2026
+    expect(W.weekYear("2025-12-28")).toBe(2026);
+    expect(W.weekNumber("2026-10-18")).toBe(43); // 18/10–24/10/2026
+    expect(W.weekNumber("2026-10-11")).toBe(42);
+    expect(W.sundayOfWeekNumber(2026, 43)).toBe("2026-10-18");
+    expect(W.weekNumber("2026-12-20")).toBe(52);
+    expect([W.weekNumber("2026-12-27"), W.weekYear("2026-12-27")]).toEqual([1, 2027]); // 27/12/2026–02/01/2027
+    expect([W.weekNumber("2023-01-01"), W.weekYear("2023-01-01")]).toEqual([1, 2023]); // שנה שמתחילה ביום ראשון
+    expect(W.weekLabel("2026-12-27")).toBe("שבוע 1 (2027)");
   });
   it("timeline handles month/year boundaries and real month lengths", () => {
     const t = W.buildTimeline("2025-12-01", "2026-03-31");
     expect(t.weeks[0].start).toBe("2025-11-30"); // שייך לנובמבר
     expect(t.months[0].label).toBe("נובמבר");
     const months = t.months.map((m) => `${m.label}:${m.count}`);
-    expect(months).toEqual(["נובמבר:1", "דצמבר:4", "ינואר:4", "פברואר:4", "מרץ:5"]);
+    expect(months).toEqual(["נובמבר:1", "דצמבר:4", "ינואר:4", "פברואר:4", "מרץ:5"]); // כותרות לפי יום ראשון — ללא שינוי
     expect(t.years.map((y) => y.count)).toEqual([5, 13]);
+    expect(t.weeks.find((w) => w.start === "2025-12-28")?.num).toBe(1); // שבוע 1 של 2026 מתחיל בדצמבר
     for (let i = 1; i < t.weeks.length; i++) expect(W.daysDiff(t.weeks[i - 1].start, t.weeks[i].start)).toBe(7);
   });
   it("DST transitions do not break arithmetic", () => {
