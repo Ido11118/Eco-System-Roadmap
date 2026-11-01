@@ -99,6 +99,13 @@
       "when": 1792445997576,
       "tag": "0013_backlog_shared_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793572444499,
+      "tag": "0014_oauth_mcp",
+      "breakpoints": true
     }
   ]
 }

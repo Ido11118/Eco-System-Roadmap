@@ -1,0 +1,126 @@
+# הגדרה: התחברות עם Google וחיבור Claude / ChatGPT
+
+מדריך חד-פעמי למנהל המערכת. אחרי השלבים האלה:
+- במסך ההתחברות יופיע כפתור **"התחברות עם Google"**.
+- כל משתמש יוכל לחבר את **Claude** או את **ChatGPT** לתוכנית העבודה, דרך **הגדרות ← חיבורי AI**.
+
+> שני הפיצ'רים עצמאיים. חיבור עוזרי AI עובד גם בלי Google (המשתמש מתחבר במסך האישור עם מייל וסיסמה). אפשר להתחיל מחלק ב'.
+
+בכל המקומות במדריך, `https://YOUR-APP` היא הכתובת הציבורית של המערכת ב-Railway (למשל `https://workplan-production.up.railway.app`, או דומיין משלך).
+
+---
+
+## חלק א': Google Cloud Console (בערך 10 דקות)
+
+כדאי לעשות את זה עם חשבון Google של הארגון.
+
+1. **פרויקט:** נכנסים ל-https://console.cloud.google.com, ובבורר הפרויקטים למעלה בוחרים **New Project**. שם: `Workplan`. **Create**, ואז בוחרים בפרויקט החדש.
+2. **מסך ההסכמה:** בתפריט: **APIs & Services ← OAuth consent screen** (במסך החדש זה נקרא **Google Auth Platform**). לוחצים **Get started**:
+   - **App information:** שם האפליקציה `תוכנית עבודה`, ומייל תמיכה.
+   - **Audience:**
+     - **Internal:** רק משתמשים מהארגון. זמין רק אם יש לארגון **Google Workspace**, וזו האפשרות המומלצת אם יש.
+     - **External:** כל חשבון Google, כולל ג'ימייל פרטי.
+   - **Contact information:** המייל שלך. מאשרים את התנאים ולוחצים **Create**.
+3. **אם בחרת External:** במסך **Audience** הסטטוס מתחיל ב-**Testing**. במצב הזה רק "Test users" שהוספת ידנית יכולים להתחבר. לוחצים **Publish app** כדי לעבור ל-**In production**. מאחר שהמערכת מבקשת רק שם ומייל (`openid`, `email`, `profile`), Google **לא** דורש תהליך אימות.
+4. **יצירת מזהה:** **Clients** (או **Credentials ← Create credentials ← OAuth client ID**):
+   - **Application type:** `Web application`
+   - **Name:** `Workplan`
+   - **Authorized redirect URIs ← Add URI:**
+     ```
+     https://YOUR-APP/api/auth/google/callback
+     ```
+     להרצה מקומית אפשר להוסיף גם: `http://localhost:3001/api/auth/google/callback`
+   - **Create**
+5. **העתקת הפרטים:** בחלון שנפתח מעתיקים את **Client ID** ואת **Client secret**, ומומלץ ללחוץ גם **Download JSON**. בממשק החדש של Google הסוד מוצג פעם אחת בלבד.
+
+---
+
+## חלק ב': משתני סביבה ב-Railway
+
+ב-Railway: הפרויקט ← השירות של האפליקציה ← **Variables**. מוסיפים או בודקים:
+
+| משתנה | ערך | חובה? |
+|---|---|---|
+| `APP_URL` | `https://YOUR-APP` בדיוק, בלי `/` בסוף | **חובה לשני הפיצ'רים.** ממנו נבנות כל הכתובות שמקבלים Google, Claude ו-ChatGPT |
+| `GOOGLE_CLIENT_ID` | ה-Client ID מחלק א' | ל-Google |
+| `GOOGLE_CLIENT_SECRET` | ה-Client secret מחלק א' | ל-Google |
+| `GOOGLE_ALLOWED_DOMAINS` | למשל `your-org.com` (כמה דומיינים מפרידים בפסיק) | לא חובה. כשמוגדר, רק חשבונות Google Workspace מהדומיין יכולים להתחבר. ריק = כל חשבון Google |
+| `TRUST_PROXY` | `true` | מומלץ. Railway יושב מאחורי Proxy, וכך הגבלת הניסיונות עובדת לפי כתובת המשתמש |
+
+שומרים, ו-Railway פורס מחדש. **המיגרציה של בסיס הנתונים רצה אוטומטית בעלייה**, אין צורך להריץ דבר.
+
+**בדיקה מהירה אחרי הפריסה:**
+1. פותחים את `https://YOUR-APP/login`, ובו אמור להופיע הכפתור "התחברות עם Google".
+2. פותחים את `https://YOUR-APP/.well-known/oauth-authorization-server`. אמור להופיע JSON, וכל הכתובות בו צריכות להתחיל ב-`https://YOUR-APP`. אם מופיע `localhost`, צריך לתקן את `APP_URL`.
+
+**משתמשים חדשים שנכנסים עם Google** נוצרים בסטטוס "ממתין לאישור", בדיוק כמו בהרשמה רגילה. מאשרים אותם ב**ניהול מערכת** כרגיל. משתמש קיים שנכנס עם Google (לפי אותו מייל) מגיע לחשבון שלו עם כל ההרשאות.
+
+---
+
+## חלק ג': חיבור Claude
+
+כתובת החיבור לכל המשתמשים: **`https://YOUR-APP/api/mcp`**. היא מוצגת גם במערכת, ב**הגדרות ← חיבורי AI**, עם כפתור העתקה.
+
+Custom connectors זמינים בכל התוכניות של Claude (ב-Free: connector אחד בלבד), באתר ובאפליקציית הדסקטופ.
+
+**חשבון אישי (Free / Pro / Max):**
+1. ב-claude.ai: **Customize ← Connectors** (https://claude.ai/customize/connectors).
+2. **+ Add ← Add custom connector.**
+3. **Name:** `תוכנית עבודה`. **URL:** `https://YOUR-APP/api/mcp`. לוחצים **Continue**.
+4. **Authentication:** `Sign in now`.
+5. **OAuth client:** אפשר להשאיר את ברירת המחדל (`Use Claude's published identity`), וגם `Register automatically` עובד. המערכת תומכת בשתי השיטות.
+6. **Add.** נפתח חלון של המערכת: מתחברים (עם Google או עם סיסמה), בוחרים **קריאה בלבד** או **קריאה ועריכה**, ולוחצים **אישור וחיבור**.
+7. כדי להשתמש בצ'אט: כפתור **+** בתיבת ההקלדה ← **Connectors** ← מפעילים את "תוכנית עבודה".
+
+**חשבון Team / Enterprise:** רק מנהל החשבון (Owner) יכול להוסיף connector, ועושים את זה פעם אחת לכל הארגון:
+1. **Organization settings ← Connectors** (https://claude.ai/admin-settings/connectors) ← **Add** ← **Custom ← Web**.
+2. שם וכתובת כמו למעלה ← **Continue** ← Authentication: `Sign in when needed` ← **Add**.
+3. כל עובד נכנס אחר כך ל-**Customize ← Connectors**, מוצא את "תוכנית עבודה" ולוחץ **Connect**. כל אחד מתחבר בנפרד, עם ההרשאות שלו.
+
+> ב-Claude אין עריכה של connector. כדי לשנות כתובת מוחקים ומוסיפים מחדש.
+
+---
+
+## חלק ד': חיבור ChatGPT
+
+> לא יכולתי לאמת את שמות התפריטים העדכניים של ChatGPT מול התיעוד שלהם. המהות לא משתנה, אבל ייתכן שהשמות במסך יהיו מעט שונים.
+
+חיבור שרת MCP חיצוני ב-ChatGPT נעשה דרך **Developer mode**, בתוכניות בתשלום (Plus / Pro / Business / Enterprise / Edu). ב-Business / Enterprise ייתכן שמנהל סביבת העבודה צריך לאפשר את זה קודם.
+
+1. ב-ChatGPT: **Settings ← Apps & Connectors** (או **Connectors**) ← **Advanced settings** ← מפעילים **Developer mode**.
+2. חוזרים ל-**Apps & Connectors** ← **Create** (או **Add custom connector**).
+3. **Name:** `תוכנית עבודה`. **MCP Server URL:** `https://YOUR-APP/api/mcp`. **Authentication:** `OAuth`. מאשרים שזה connector שאתה סומך עליו ולוחצים **Create**.
+4. נפתח חלון של המערכת: מתחברים, בוחרים רמת גישה ומאשרים.
+5. בצ'אט: בוחרים את ה-connector מתפריט ה-**+** או מתפריט הכלים. ChatGPT מבקש אישור לפני כל פעולת עריכה.
+
+---
+
+## חלק ה': מה להגיד לעובדים
+
+- **החיבור:** "בהגדרות (התפריט עם השם שלך למעלה) ← **חיבורי AI** יש את הכתובת וההוראות. מחברים פעם אחת."
+- **ההרשאות:** העוזר פועל **עם ההרשאות שלך בלבד**. הוא יכול לערוך רק בתחומים שמותרים לך, ו**לא יכול למחוק**.
+- **ההיסטוריה:** כל שינוי נרשם בהיסטוריה של התכולה בשמך, עם הסימון "(דרך Claude)" או "(דרך ChatGPT)".
+- **ניהול החיבור:** ב**חיבורי AI** אפשר לעבור בין "קריאה בלבד" ל"קריאה ועריכה", או **לנתק**. השינוי חל מיד.
+- **דוגמאות למה לבקש:** "מה בעבודה אצל צוות עזרים 1 החודש?", "תזיז את כל התכולות של תחום אש שבוע קדימה", "תוסיף לבאקלוג של אג"ם: מחקר היתכנות לממשק חדש".
+
+---
+
+## תקלות נפוצות
+
+| מה רואים | מה לעשות |
+|---|---|
+| Google: `Error 400: redirect_uri_mismatch` | הכתובת ב-Google Cloud (חלק א' שלב 4) חייבת להיות זהה בדיוק ל-`APP_URL` + `/api/auth/google/callback`, כולל `https`, ובלי `/` בסוף |
+| Google: "Access blocked: app is in testing" | חלק א' שלב 3: **Publish app**, או הוספת המשתמש ל-Test users |
+| "ניתן להתחבר רק עם חשבון Google ארגוני" | המשתמש נכנס עם ג'ימייל פרטי ו-`GOOGLE_ALLOWED_DOMAINS` מוגדר. זו ההגבלה שביקשת |
+| Claude / ChatGPT: "הלקוח שביקש את החיבור אינו מוכר" | מסירים את ה-connector ומוסיפים מחדש |
+| העוזר אומר שאין לו כלי עריכה | החיבור במצב "קריאה בלבד". משנים ב**חיבורי AI** |
+| "החשבון שלך עדיין לא אושר" | מאשרים את המשתמש ב**ניהול מערכת** |
+| העוזר לא מצליח להתחבר בכלל | בודקים שהכתובת `https://YOUR-APP/.well-known/oauth-authorization-server` נפתחת מבחוץ ושכל הכתובות בה נכונות (`APP_URL`) |
+
+---
+
+## איך זה עובד (בקצרה)
+
+- **Google** רק מזהה את המשתמש: הוא מחזיר מייל מאומת. ההרשאות, הסטטוס והאישור נשארים של המערכת.
+- **המערכת היא שרת OAuth:** Claude או ChatGPT מקבלים ממנה מפתח מוגבל, ולא את הסיסמה. מפתח גישה תקף שעה, ומתחדש אוטומטית עד 90 יום מהשימוש האחרון. המפתחות נשמרים מוצפנים (Hash).
+- **השרת:** `/api/mcp` הוא שרת MCP. כל כלי בו קורא לאותן פונקציות שהממשק משתמש בהן, ולכן ההרשאות, בדיקות החפיפה, נעילת הגרסאות וההיסטוריה זהים לעבודה במסך.

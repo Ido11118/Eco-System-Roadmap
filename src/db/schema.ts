@@ -284,3 +284,53 @@ export const userRequests = pgTable("user_requests", {
   check("user_requests_kind_chk", sql`${t.kind} in ('permissions','password_reset')`),
   check("user_requests_status_chk", sql`${t.status} in ('open','approved','rejected','done')`),
 ]);
+
+// ---------------------------------------------------------------------------
+// OAuth: חיבור עוזרי AI (Claude, ChatGPT) דרך שרת ה-MCP
+// ---------------------------------------------------------------------------
+
+// לקוח OAuth שנרשם אוטומטית (Dynamic Client Registration) — למשל Claude או ChatGPT
+export const oauthClients = pgTable("oauth_clients", {
+  id: text("id").primaryKey(), // client_id: מזהה שהונפק ברישום, או כתובת https של מסמך זיהוי (CIMD)
+  name: text("name").notNull(),
+  redirectUris: text("redirect_uris").array().notNull(),
+  secretHash: text("secret_hash"), // רק ללקוח שביקש סוד (client_secret_post / client_secret_basic)
+  authMethod: varchar("auth_method", { length: 30 }).notNull().default("none"),
+  fetchedAt: ts("fetched_at"), // לקוח CIMD: מתי נקרא מסמך הזיהוי (רענון תקופתי)
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
+// קוד חד-פעמי (שלב ההחזרה מהמסך "אישור חיבור") — תקף לדקות ספורות ולשימוש אחד
+export const oauthCodes = pgTable("oauth_codes", {
+  id: text("id").primaryKey(), // sha256 של הקוד
+  clientId: text("client_id").notNull().references(() => oauthClients.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  redirectUri: text("redirect_uri").notNull(),
+  codeChallenge: text("code_challenge").notNull(),
+  scope: text("scope").notNull(),
+  expiresAt: ts("expires_at").notNull(),
+  usedAt: ts("used_at"),
+});
+
+// חיבור (הרשאה שהמשתמש נתן ללקוח) — מוצג ב"חיבורי AI", וניתוק מבטל את כל המפתחות שלו
+export const oauthGrants = pgTable("oauth_grants", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull().references(() => oauthClients.id, { onDelete: "cascade" }),
+  scope: text("scope").notNull(), // "plan:read" או "plan:read plan:write"
+  createdAt: ts("created_at").notNull().defaultNow(),
+  lastUsedAt: ts("last_used_at"),
+  revokedAt: ts("revoked_at"),
+}, (t) => [index("oauth_grants_user_idx").on(t.userId)]);
+
+// מפתחות גישה / חידוש — נשמרים כ-Hash בלבד
+export const oauthTokens = pgTable("oauth_tokens", {
+  id: text("id").primaryKey(), // sha256 של המפתח
+  grantId: integer("grant_id").notNull().references(() => oauthGrants.id, { onDelete: "cascade" }),
+  kind: varchar("kind", { length: 10 }).notNull(), // access | refresh
+  expiresAt: ts("expires_at").notNull(),
+  createdAt: ts("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("oauth_tokens_grant_idx").on(t.grantId),
+  check("oauth_tokens_kind_chk", sql`${t.kind} in ('access','refresh')`),
+]);

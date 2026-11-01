@@ -13,7 +13,7 @@ const SESSION_DAYS = 14;
 export const sha256 = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
 export const randomToken = () => crypto.randomBytes(32).toString("base64url");
 
-function secureCookies() {
+export function secureCookies() {
   if (process.env.COOKIE_SECURE) return process.env.COOKIE_SECURE === "true";
   return (process.env.APP_URL ?? "").startsWith("https://");
 }
@@ -60,7 +60,16 @@ export async function getMe(): Promise<Me | null> {
     .innerJoin(users, eq(users.id, sessions.userId))
     .where(and(eq(sessions.id, sha256(token)), gt(sessions.expiresAt, new Date())));
   if (!rows.length) return null;
-  const u = rows[0].u;
+  return toMe(rows[0].u);
+}
+
+/** המשתמש לפי מזהה (לגישה עם מפתח OAuth — ללא עוגיית סשן). null אם לא קיים. */
+export async function loadMe(userId: number): Promise<Me | null> {
+  const [u] = await db.select().from(users).where(eq(users.id, userId));
+  return u ? toMe(u) : null;
+}
+
+async function toMe(u: typeof users.$inferSelect): Promise<Me> {
   const perms = await db.select({ d: userDomainPermissions.domainId }).from(userDomainPermissions)
     .where(eq(userDomainPermissions.userId, u.id));
   return {

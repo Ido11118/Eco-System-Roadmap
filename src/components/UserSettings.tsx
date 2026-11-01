@@ -1,5 +1,5 @@
 "use client";
-// "הגדרות" של המשתמש (מתפריט השם למעלה): ההרשאות שלי + בקשת הרשאות עריכה נוספות, ושינוי סיסמה.
+// "הגדרות" של המשתמש (מתפריט השם למעלה): ההרשאות שלי + בקשת הרשאות עריכה נוספות, שינוי סיסמה, וחיבורי AI.
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
@@ -9,6 +9,7 @@ import { api } from "@/lib/api";
 import { Dialog } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { PasswordInput } from "@/components/ui/PasswordInput";
+import { AiConnections } from "@/components/AiConnections";
 
 type Settings = {
   domains: { id: number; name: string }[];
@@ -16,17 +17,17 @@ type Settings = {
 };
 
 export function UserSettingsDialog({ me, onClose }: { me: Me; onClose: () => void }) {
-  const [tab, setTab] = useState<"perms" | "password">("perms");
+  const [tab, setTab] = useState<"perms" | "password" | "ai">("perms");
   return (
     <Dialog open onClose={onClose} width={560} title={<span className="flex items-center gap-2"><ShieldCheck size={16} className="text-brand-600" />הגדרות</span>}
       footer={<button className="btn-secondary" onClick={onClose}>סגירה</button>}>
       <div className="mb-3 flex gap-1 border-b border-ink-200">
-        {([["perms", "ההרשאות שלי"], ["password", "שינוי סיסמה"]] as const).map(([k, l]) => (
+        {([["perms", "ההרשאות שלי"], ["password", "שינוי סיסמה"], ["ai", "חיבורי AI"]] as const).map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} data-testid={`settings-tab-${k}`}
             className={clsx("-mb-px border-b-2 px-3 py-1.5 text-[13px] font-medium", tab === k ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500 hover:text-ink-900")}>{l}</button>
         ))}
       </div>
-      {tab === "perms" ? <Permissions me={me} /> : <ChangePassword />}
+      {tab === "perms" ? <Permissions me={me} /> : tab === "password" ? <ChangePassword /> : <AiConnections />}
     </Dialog>
   );
 }

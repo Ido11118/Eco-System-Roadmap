@@ -7,6 +7,7 @@ import {
 import type { Dependency, ItemDTO, Me, MilestoneDTO, PlanData, RowDTO, SprintDTO } from "@/lib/types";
 import { ApiError } from "./errors";
 import { loadCatalog } from "./catalog";
+import { currentVia } from "./requestContext";
 import { DELETED_RETENTION_DAYS } from "@/lib/constants";
 import type { Catalog } from "@/lib/catalog";
 
@@ -110,6 +111,8 @@ export async function audit(
   q: Tx | typeof db, userId: number | null, entityType: string, entityId: string | number, action: string,
   changes?: Record<string, unknown> | null, summary = "",
 ) {
+  const via = currentVia(); // פעולה דרך עוזר AI — מסומנת בהיסטוריה
+  if (via) { changes = { ...(changes ?? {}), via }; summary = summary ? `${summary} (דרך ${via})` : `דרך ${via}`; }
   await q.insert(auditLogs).values({ userId, entityType, entityId: String(entityId), action, changes: changes ?? null, summary });
 }
 

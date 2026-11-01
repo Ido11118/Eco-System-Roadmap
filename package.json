@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@fontsource/heebo": "^5.2.7",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@tanstack/react-query": "^5.90.2",
     "bcryptjs": "^3.0.2",
     "clsx": "^2.1.1",

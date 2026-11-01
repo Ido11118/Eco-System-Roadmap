@@ -15,7 +15,9 @@ const isSuper = (me: Me) => me.role === "SUPER";
  * אותם כללים כמו ביצירה רגילה: הרשאה לפי תחום / רוחבי, ערכים מהקטלוג, ללא חפיפה בשורת צוות.
  * תכולות צוות משובצות אוטומטית בשורה הראשונה הפנויה, ואם אין — נוצרת שורה חדשה.
  */
-export async function importPlan(me: Me, p: ImportPayload): Promise<ImportResult> {
+export async function importPlan(me: Me, p: ImportPayload, opts?: { tag?: string }): Promise<ImportResult> {
+  // תיאור המקור בהיסטוריה. ב-MCP אין תיאור — הסימון "דרך <עוזר>" נוסף אוטומטית ב-audit()
+  const tag = opts?.tag ?? " (ייבוא בעזרת AI)";
   const cat = await loadCatalog();
   const [ts, ds] = await Promise.all([db.select().from(teams).where(isNull(teams.archivedAt)), db.select().from(domains)]);
   const teamDomain = new Map(ts.map((t) => [t.id, t.domainId]));
@@ -69,7 +71,7 @@ export async function importPlan(me: Me, p: ImportPayload): Promise<ImportResult
       if (!newRows.has(key)) {
         const last = Math.max(0, ...rows.filter((r) => r.kind === "TEAM" && r.teamId === teamId).map((r) => r.sortOrder));
         const [row] = await tx.insert(workRows).values({ kind: "TEAM", teamId, sortOrder: last + 1000 * (k + 1), createdById: me.id }).returning();
-        await audit(tx, me.id, "row", row.id, "create", { teamId, import: "ai" }, "נוספה שורה (ייבוא בעזרת AI)");
+        await audit(tx, me.id, "row", row.id, "create", { teamId, import: "ai" }, `נוספה שורה${tag}`);
         newRows.set(key, row.id); out.rowIds.push(row.id);
       }
       return newRows.get(key)!;
@@ -90,27 +92,27 @@ export async function importPlan(me: Me, p: ImportPayload): Promise<ImportResult
         status: i.status ?? cat.defaultStatus, priority: i.priority ?? cat.defaultPriority, notes: i.notes,
         createdById: me.id, updatedById: me.id,
       }).returning();
-      await audit(tx, me.id, "item", it.id, "create", { name: it.name, startWeek: it.startWeek, endWeek: it.endWeek, status: it.status, import: "ai" }, `נוצרה תכולה "${it.name}" (ייבוא בעזרת AI)`);
+      await audit(tx, me.id, "item", it.id, "create", { name: it.name, startWeek: it.startWeek, endWeek: it.endWeek, status: it.status, import: "ai" }, `נוצרה תכולה "${it.name}"${tag}`);
       out.itemIds.push(it.id);
     }
     for (const m of p.milestones) {
       const [r] = await tx.insert(milestones).values({ ...m, createdById: me.id, updatedById: me.id }).returning();
-      await audit(tx, me.id, "milestone", r.id, "create", { name: r.name, date: r.date, import: "ai" }, `נוצרה אבן דרך "${r.name}" (ייבוא בעזרת AI)`);
+      await audit(tx, me.id, "milestone", r.id, "create", { name: r.name, date: r.date, import: "ai" }, `נוצרה אבן דרך "${r.name}"${tag}`);
       out.milestoneIds.push(r.id);
     }
     for (const s of p.sprints) {
       const [r] = await tx.insert(sprints).values({ ...s, createdById: me.id, updatedById: me.id }).returning();
-      await audit(tx, me.id, "sprint", r.id, "create", { name: r.name, import: "ai" }, `נוצר ספרינט "${r.name}" (ייבוא בעזרת AI)`);
+      await audit(tx, me.id, "sprint", r.id, "create", { name: r.name, import: "ai" }, `נוצר ספרינט "${r.name}"${tag}`);
       out.sprintIds.push(r.id);
     }
     for (const b of p.backlog) {
       const [r] = await tx.insert(backlogItems).values({
         name: b.name, domainId: b.domainId, teamId: b.teamId, priority: b.priority ?? cat.defaultPriority, notes: b.notes, createdById: me.id, updatedById: me.id,
       }).returning();
-      await audit(tx, me.id, "backlog", r.id, "create", { name: r.name, domainId: r.domainId, teamId: r.teamId, import: "ai" }, `נוסף לבאקלוג "${r.name}" (ייבוא בעזרת AI)`);
+      await audit(tx, me.id, "backlog", r.id, "create", { name: r.name, domainId: r.domainId, teamId: r.teamId, import: "ai" }, `נוסף לבאקלוג "${r.name}"${tag}`);
       out.backlogIds.push(r.id);
     }
-    await audit(tx, me.id, "import", "ai", "create", out, `ייבוא בעזרת AI: ${out.itemIds.length} תכולות, ${out.milestoneIds.length} אבני דרך, ${out.sprintIds.length} ספרינטים, ${out.backlogIds.length} פריטי באקלוג`);
+    if (opts?.tag === undefined) await audit(tx, me.id, "import", "ai", "create", out, `ייבוא בעזרת AI: ${out.itemIds.length} תכולות, ${out.milestoneIds.length} אבני דרך, ${out.sprintIds.length} ספרינטים, ${out.backlogIds.length} פריטי באקלוג`);
     return out;
   });
 }
