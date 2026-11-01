@@ -24,6 +24,7 @@ import { currentPrefs, sanitizeView, savePrefs, useViewOnly } from "./prefs";
 import { locateItem } from "./locate";
 import { DeletedItemsButton } from "./DeletedItems";
 import { BacklogView } from "@/components/backlog/BacklogView";
+import { ExportButton } from "@/components/gantt/export/ExportButton";
 
 type Mode = "gantt" | "table" | "compare" | "backlog";
 const MODES: Mode[] = ["gantt", "table", "compare", "backlog"];
@@ -233,6 +234,7 @@ export function PlanApp({ me }: { me: Me }) {
               </button>
             )}
             {!snapId && mode !== "compare" && mode !== "backlog" && !viewOnly && live.data && canEditSomething && <DeletedItemsButton data={live.data} isSuper={me.role === "SUPER"} />}
+            {mode === "gantt" && data && <ExportButton data={data} view={view} sourceName={snapId ? snapMeta?.name : undefined} />}
             {!snapId && mode !== "compare" && mode !== "backlog" && <SaveSnapshotButton isSuper={me.role === "SUPER"} />}
           </div>
         </TopBar>
