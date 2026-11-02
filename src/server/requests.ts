@@ -6,22 +6,23 @@ import type { Me } from "@/lib/types";
 import { ApiError } from "./errors";
 import { audit } from "./plan";
 import { createResetToken, resetLinkFor } from "./users";
+import { notifyPasswordResetRequest, notifyPermissionRequest } from "./notify";
 
 // ---------------------------------------------------------------------------
 // פניות משתמשים למנהל המערכת
 // ---------------------------------------------------------------------------
 
-/** פנייה פתוחה אחת לכל משתמש לכל סוג: פנייה חוזרת מעדכנת את הקיימת */
+/** פנייה פתוחה אחת לכל משתמש לכל סוג: פנייה חוזרת מעדכנת את הקיימת. isNew — כדי לשלוח מייל רק על פנייה חדשה */
 async function upsertOpen(userId: number, kind: "permissions" | "password_reset", v: { domainIds?: number[]; requestCross?: boolean; note?: string }) {
   return db.transaction(async (tx) => {
     const [open] = await tx.select().from(userRequests)
       .where(and(eq(userRequests.userId, userId), eq(userRequests.kind, kind), eq(userRequests.status, "open")));
     if (open) {
       const [u] = await tx.update(userRequests).set({ ...v, createdAt: new Date() }).where(eq(userRequests.id, open.id)).returning();
-      return u;
+      return { ...u, isNew: false };
     }
     const [n] = await tx.insert(userRequests).values({ userId, kind, ...v }).returning();
-    return n;
+    return { ...n, isNew: true };
   });
 }
 
@@ -34,6 +35,7 @@ export async function requestPermissions(me: Me, v: { domainIds: number[]; reque
   if (!wanted.length && !cross) throw new ApiError(400, "לא נבחרו הרשאות חדשות לבקש");
   const r = await upsertOpen(me.id, "permissions", { domainIds: wanted, requestCross: cross, note: v.note.trim().slice(0, 500) });
   await audit(db, me.id, "user", me.id, "requestPermissions", { domainIds: wanted, requestCross: cross }, "משתמש ביקש הרשאות עריכה נוספות");
+  if (r.isNew) await notifyPermissionRequest(me, wanted, cross, v.note.trim().slice(0, 500));
   return { id: r.id };
 }
 
@@ -41,8 +43,9 @@ export async function requestPermissions(me: Me, v: { domainIds: number[]; reque
 export async function requestPasswordResetFromAdmin(email: string) {
   const [u] = await db.select().from(users).where(sql`lower(${users.email}) = ${email}`);
   if (!u || u.status === "REJECTED") return;
-  await upsertOpen(u.id, "password_reset", {});
+  const r = await upsertOpen(u.id, "password_reset", {});
   await audit(db, u.id, "user", u.id, "requestPasswordReset", null, "משתמש ביקש קישור לאיפוס סיסמה");
+  if (r.isNew) await notifyPasswordResetRequest(u);
 }
 
 /** הפניות של המשתמש עצמו (לתצוגה במסך ההגדרות שלו) */

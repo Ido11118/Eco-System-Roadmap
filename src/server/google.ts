@@ -10,6 +10,7 @@ import { audit } from "./plan";
 import { ApiError } from "./errors";
 import { appUrlFromEnv } from "@/lib/appUrl";
 import { ClaimsError, decodeJwtPayload, googleOwnsEmail, verifyIdTokenClaims, type GoogleIdentity } from "@/lib/googleClaims";
+import { notifyNewRegistration } from "./notify";
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -114,12 +115,14 @@ export async function userForGoogle(id: GoogleIdentity) {
   // אין סיסמה — נשמר Hash של ערך אקראי (לא ניתן להתחבר איתו). אפשר להגדיר סיסמה בהמשך דרך "שכחתי סיסמה".
   const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10);
   try {
-    return await db.transaction(async (tx) => {
+    const created = await db.transaction(async (tx) => {
       const [n] = await tx.insert(users).values({ email: id.email, fullName: id.name, passwordHash, status: "PENDING", googleSub: id.sub }).returning();
       await tx.insert(approvalRequests).values({ userId: n.id, requestedDomainIds: [], requestedCross: false });
       await audit(tx, n.id, "user", n.id, "register", { via: "google" }, "משתמש נרשם דרך Google וממתין לאישור");
       return n;
     });
+    await notifyNewRegistration(created, [], false); // מייל למנהל המערכת
+    return created;
   } catch (e) {
     // שתי התחברויות ראשונות במקביל (מייל / sub ייחודיים) — השנייה מקבלת את המשתמש שנוצר בראשונה
     if ((e as { code?: string }).code !== "23505") throw e;

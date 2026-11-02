@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { passwordResetTokens, sessions, users, userDomainPermissions } from "@/db/schema";
 import type { Me, UserPreferences } from "@/lib/types";
 import { ApiError } from "./errors";
+import { trackActivity, trackLogin } from "./activity";
 
 export const SESSION_COOKIE = "wp_session";
 const SESSION_DAYS = 14;
@@ -20,6 +21,7 @@ export function secureCookies() {
 }
 
 export async function createSession(userId: number) {
+  await trackLogin(userId);
   const token = randomToken();
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400000);
   await db.insert(sessions).values({ id: sha256(token), userId, expiresAt });
@@ -61,6 +63,7 @@ export async function getMe(): Promise<Me | null> {
     .innerJoin(users, eq(users.id, sessions.userId))
     .where(and(eq(sessions.id, sha256(token)), gt(sessions.expiresAt, new Date())));
   if (!rows.length) return null;
+  if (rows[0].u.status === "APPROVED") trackActivity(rows[0].u.id); // אנליטיקות: מי היה במערכת (מוגבל לפעם ב-5 דקות)
   return toMe(rows[0].u);
 }
 

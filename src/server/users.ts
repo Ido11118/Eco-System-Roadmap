@@ -9,6 +9,7 @@ import { appUrlFromEnv } from "@/lib/appUrl";
 import { audit } from "./plan";
 import { randomToken, sha256 } from "./auth";
 import { sendMail } from "./mail";
+import { notifyNewRegistration } from "./notify";
 import { revokeUserGrants } from "./oauth";
 
 // הגבלת קצב בסיסית בזיכרון (כלי פנימי, תהליך יחיד)
@@ -53,12 +54,14 @@ export async function registerUser(v: { fullName: string; email: string; passwor
   const validIds = new Set(valid.map((d) => d.id));
   const domainIds = [...new Set(v.domainIds)].filter((id) => validIds.has(id));
   const passwordHash = await bcrypt.hash(v.password, 12);
-  return db.transaction(async (tx) => {
+  const created = await db.transaction(async (tx) => {
     const [u] = await tx.insert(users).values({ email: v.email, fullName: v.fullName, passwordHash, status: "PENDING" }).returning();
     await tx.insert(approvalRequests).values({ userId: u.id, requestedDomainIds: domainIds, requestedCross: v.requestCross });
     await audit(tx, u.id, "user", u.id, "register", { domainIds, requestCross: v.requestCross }, "משתמש נרשם וממתין לאישור");
     return u;
   });
+  await notifyNewRegistration(created, domainIds, v.requestCross); // מייל למנהל המערכת (אחרי השמירה; כשל במייל לא מכשיל הרשמה)
+  return created;
 }
 
 let DUMMY_HASH: string | undefined;

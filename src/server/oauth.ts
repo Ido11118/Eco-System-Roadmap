@@ -10,6 +10,7 @@ import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 import { db } from "@/db";
 import { oauthClients, oauthCodes, oauthGrants, oauthTokens, users } from "@/db/schema";
 import type { Me } from "@/lib/types";
+import { trackActivity } from "./activity";
 import {
   ACCESS_TTL_SEC, CODE_TTL_SEC, redirectUriMatches, REFRESH_TTL_DAYS, SCOPES, accessOf, hashToken, newToken, parseScope, scopeFor,
   validRedirectUri, validResource, validScope, verifyPkce, type Access,
@@ -337,6 +338,7 @@ export async function authenticateBearer(header: string | null): Promise<McpAuth
   // המשתמש נבדק בכל קריאה: השעיה / שינוי הרשאות חלים מיד גם על עוזר ה-AI
   const me = await loadMe(row.g.userId);
   if (!me || me.status !== "APPROVED") return null;
+  trackActivity(me.id, "mcp"); // אנליטיקות: שימוש דרך Claude / כלי AI
   if (!row.g.lastUsedAt || Date.now() - row.g.lastUsedAt.getTime() > 5 * 60000) {
     await db.update(oauthGrants).set({ lastUsedAt: new Date() }).where(eq(oauthGrants.id, row.g.id));
   }

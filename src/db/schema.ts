@@ -339,3 +339,18 @@ export const oauthTokens = pgTable("oauth_tokens", {
   index("oauth_tokens_grant_idx").on(t.grantId),
   check("oauth_tokens_kind_chk", sql`${t.kind} in ('access','refresh')`),
 ]);
+
+// פעילות משתמשים (לאנליטיקות בניהול מערכת): שורה אחת לכל משתמש × יום (שעון ישראל) × מקור.
+// מקור: web — האתר; mcp — דרך Claude/כלי AI. "ביקור" = פעילות אחרי הפסקה של 30 דקות לפחות. לא נשמר תוכן — רק מונים.
+export const userActivity = pgTable("user_activity", {
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  day: date("day", { mode: "string" }).notNull(),
+  source: varchar("source", { length: 10 }).notNull().default("web"),
+  visits: integer("visits").notNull().default(0),
+  logins: integer("logins").notNull().default(0),
+  firstSeenAt: ts("first_seen_at").notNull().defaultNow(),
+  lastSeenAt: ts("last_seen_at").notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.day, t.source] }),
+  index("user_activity_day_idx").on(t.day),
+]);

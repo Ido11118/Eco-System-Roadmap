@@ -9,6 +9,7 @@ import { TopBar } from "@/components/TopBar";
 import { AppShell } from "@/components/AppShell";
 import { CatalogSettings } from "./CatalogSettings";
 import { StructureSettings } from "./StructureSettings";
+import { AnalyticsSettings } from "./AnalyticsSettings";
 import { UserAiConnections } from "./AdminAiConnections";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm, Dialog } from "@/components/ui/dialog";
@@ -24,7 +25,7 @@ const STATUS_LABEL = { PENDING: "ממתין לאישור", APPROVED: "מאושר
 const STATUS_CLS = { PENDING: "bg-amber-100 text-amber-800", APPROVED: "bg-green-100 text-green-800", REJECTED: "bg-red-100 text-red-700", SUSPENDED: "bg-ink-200 text-ink-700" };
 
 export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name: string }[] }) {
-  const [tab, setTab] = useState<"users" | "audit" | "settings" | "structure">("users");
+  const [tab, setTab] = useState<"users" | "audit" | "settings" | "structure" | "analytics">("users");
   const q = useQuery({ queryKey: ["admin-users"], queryFn: () => api<AdminUser[]>("GET", "/api/admin/users"), refetchInterval: 15000 });
   const users = q.data ?? [];
   const pending = users.filter((u) => u.status === "PENDING");
@@ -38,13 +39,13 @@ export function AdminApp({ me, domains }: { me: Me; domains: { id: number; name:
           <h1 className="text-[20px] font-bold">ניהול מערכת</h1>
           <p className="mt-1 hidden text-ink-500 md:block">משתמשים והרשאות: אישור משתמש מקנה צפייה בכל תוכנית העבודה, והרשאות עריכה ניתנות לפי תחום ובנפרד למידע הרוחבי. בלשונית &quot;מבנה הגאנט&quot; — צוותים בכל תחום; ב&quot;הגדרות&quot; — סטטוסים ותיעדוף.</p>
           <div className="mt-5 flex gap-1 overflow-x-auto border-b border-ink-200">
-            {([["users", waiting ? `משתמשים · ${waiting} ממתינים` : "משתמשים"], ["structure", "מבנה הגאנט"], ["settings", "הגדרות"], ["audit", "יומן פעולות"]] as const).map(([k, l]) => (
+            {([["users", waiting ? `משתמשים · ${waiting} ממתינים` : "משתמשים"], ["analytics", "אנליטיקות"], ["structure", "מבנה הגאנט"], ["settings", "הגדרות"], ["audit", "יומן פעולות"]] as const).map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} data-testid={`admin-tab-${k}`}
                 className={clsx("-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-medium", tab === k ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500 hover:text-ink-900")}>{l}</button>
             ))}
           </div>
           <div className="mt-4 space-y-3">
-            {tab === "settings" ? <CatalogSettings /> : tab === "structure" ? <StructureSettings /> : tab === "audit" ? <AuditLog /> : (
+            {tab === "settings" ? <CatalogSettings /> : tab === "structure" ? <StructureSettings /> : tab === "analytics" ? <AnalyticsSettings /> : tab === "audit" ? <AuditLog /> : (
               <UsersPage users={users} pending={pending} requests={reqs.data ?? []} domains={domains} loading={q.isLoading} />
             )}
           </div>
