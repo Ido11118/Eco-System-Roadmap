@@ -3,12 +3,12 @@ import "server-only";
 // Google רק מזהה את המשתמש (מייל מאומת). ההרשאות, הסטטוס ותהליך האישור — של המערכת, בדיוק כמו בהתחברות עם סיסמה.
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
-import { sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { approvalRequests, users } from "@/db/schema";
 import { audit } from "./plan";
 import { ApiError } from "./errors";
-import { ClaimsError, decodeJwtPayload, verifyIdTokenClaims, type GoogleIdentity } from "@/lib/googleClaims";
+import { ClaimsError, decodeJwtPayload, googleOwnsEmail, verifyIdTokenClaims, type GoogleIdentity } from "@/lib/googleClaims";
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -30,10 +30,19 @@ export function appUrl(): string {
 
 export const googleRedirectUri = () => `${appUrl()}/api/auth/google/callback`;
 
-/** כתובת חזרה פנימית בלבד (מונע Open Redirect): נתיב יחסי שמתחיל ב-"/" אחד */
+/**
+ * כתובת חזרה פנימית בלבד (מונע Open Redirect): נתיב יחסי באתר שלנו.
+ * תווי בקרה (Tab / שורה חדשה) ו-"\" נדחים — הדפדפן מסיר אותם, ו-"/\t/evil.com" היה הופך ל-"//evil.com".
+ * בסוף מוודאים שהכתובת המפוענחת נשארת באותו מקור (origin).
+ */
 export function safeNext(next: string | null | undefined): string | null {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return null;
-  return next.slice(0, 2000);
+  if (!next || next.length > 2000 || !next.startsWith("/") || /[\x00-\x1f\x7f\\]/.test(next)) return null;
+  try {
+    const base = new URL(appUrl());
+    const u = new URL(next, base);
+    if (u.origin !== base.origin) return null;
+    return u.pathname + u.search;
+  } catch { return null; }
 }
 
 const b64url = (b: Buffer) => b.toString("base64url");
@@ -74,23 +83,47 @@ export async function finishGoogleFlow(cfg: GoogleConfig, flow: GoogleFlow, code
   catch (e) { throw new ApiError(e instanceof ClaimsError ? e.status : 400, (e as Error).message); }
 }
 
+function assertActive(u: typeof users.$inferSelect) {
+  if (u.status === "REJECTED") throw new ApiError(403, "בקשת ההרשמה נדחתה. לפרטים פנה למנהל המערכת.");
+  if (u.status === "SUSPENDED") throw new ApiError(403, "הגישה לחשבון הושעתה. לפרטים פנה למנהל המערכת.");
+  return u;
+}
+
 /**
- * המשתמש במערכת לפי המייל מ-Google: משתמש קיים — אותו חשבון ואותן הרשאות.
- * משתמש חדש — נוצר בסטטוס "ממתין לאישור" (כמו בהרשמה רגילה), ומנהל המערכת מאשר ומגדיר הרשאות.
+ * המשתמש במערכת לפי חשבון Google:
+ * 1. חשבון Google שכבר קושר (לפי sub — מזהה קבוע של Google) → אותו משתמש, גם אם המייל בחשבון השתנה.
+ * 2. משתמש קיים עם אותו מייל (השוואה באותיות קטנות; ייחודי בבסיס הנתונים) → אותו חשבון, אותן הרשאות,
+ *    וחשבון ה-Google נקשר אליו. רק כש-Google מוסמך לכתובת (Workspace / Gmail), ורק אם לא קושר אליו חשבון Google אחר.
+ * 3. אחרת — משתמש חדש בסטטוס "ממתין לאישור" (כמו בהרשמה רגילה), ומנהל המערכת מאשר ומגדיר הרשאות.
  */
 export async function userForGoogle(id: GoogleIdentity) {
+  const [bySub] = await db.select().from(users).where(eq(users.googleSub, id.sub));
+  if (bySub) return assertActive(bySub);
   const [u] = await db.select().from(users).where(sql`lower(${users.email}) = ${id.email}`);
   if (u) {
-    if (u.status === "REJECTED") throw new ApiError(403, "בקשת ההרשמה נדחתה. לפרטים פנה למנהל המערכת.");
-    if (u.status === "SUSPENDED") throw new ApiError(403, "הגישה לחשבון הושעתה. לפרטים פנה למנהל המערכת.");
-    return u;
+    assertActive(u);
+    if (u.googleSub) throw new ApiError(403, "לחשבון הזה כבר מקושר חשבון Google אחר. פנה למנהל המערכת.");
+    if (!googleOwnsEmail(id)) throw new ApiError(403, "לכתובת הזו כבר יש חשבון במערכת. התחבר עם הדוא\"ל והסיסמה.");
+    const [linked] = await db.update(users).set({ googleSub: id.sub, updatedAt: new Date() })
+      .where(and(eq(users.id, u.id), isNull(users.googleSub))).returning();
+    if (!linked) throw new ApiError(409, "ההתחברות נכשלה. נסה שוב.");
+    await audit(db, u.id, "user", u.id, "linkGoogle", { email: id.email }, "חשבון Google קושר למשתמש (התחברות ראשונה עם Google)");
+    return linked;
   }
   // אין סיסמה — נשמר Hash של ערך אקראי (לא ניתן להתחבר איתו). אפשר להגדיר סיסמה בהמשך דרך "שכחתי סיסמה".
   const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10);
-  return db.transaction(async (tx) => {
-    const [n] = await tx.insert(users).values({ email: id.email, fullName: id.name, passwordHash, status: "PENDING" }).returning();
-    await tx.insert(approvalRequests).values({ userId: n.id, requestedDomainIds: [], requestedCross: false });
-    await audit(tx, n.id, "user", n.id, "register", { via: "google" }, "משתמש נרשם דרך Google וממתין לאישור");
-    return n;
-  });
+  try {
+    return await db.transaction(async (tx) => {
+      const [n] = await tx.insert(users).values({ email: id.email, fullName: id.name, passwordHash, status: "PENDING", googleSub: id.sub }).returning();
+      await tx.insert(approvalRequests).values({ userId: n.id, requestedDomainIds: [], requestedCross: false });
+      await audit(tx, n.id, "user", n.id, "register", { via: "google" }, "משתמש נרשם דרך Google וממתין לאישור");
+      return n;
+    });
+  } catch (e) {
+    // שתי התחברויות ראשונות במקביל (מייל / sub ייחודיים) — השנייה מקבלת את המשתמש שנוצר בראשונה
+    if ((e as { code?: string }).code !== "23505") throw e;
+    const [again] = await db.select().from(users).where(eq(users.googleSub, id.sub));
+    if (!again) throw e;
+    return assertActive(again);
+  }
 }

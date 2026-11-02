@@ -38,7 +38,8 @@ export function basicAuth(req: NextRequest): { id: string; secret: string } | nu
   const raw = Buffer.from(m[1], "base64").toString("utf8");
   const i = raw.indexOf(":");
   if (i < 0) return null;
-  return { id: decodeURIComponent(raw.slice(0, i)), secret: decodeURIComponent(raw.slice(i + 1)) };
+  try { return { id: decodeURIComponent(raw.slice(0, i)), secret: decodeURIComponent(raw.slice(i + 1)) }; }
+  catch { throw new OAuthError(401, "invalid_client", "malformed Basic authorization header"); }
 }
 
 export function oauthHandler(fn: (req: NextRequest) => Promise<Response>) {
@@ -46,7 +47,7 @@ export function oauthHandler(fn: (req: NextRequest) => Promise<Response>) {
     try { return await fn(req); }
     catch (e) {
       if (e instanceof OAuthError) return oauthJson({ error: e.code, error_description: e.message }, e.status);
-      if (e instanceof ApiError) return oauthJson({ error: e.status === 429 ? "slow_down" : "invalid_request", error_description: e.message }, e.status);
+      if (e instanceof ApiError) return oauthJson({ error: e.status === 429 ? "temporarily_unavailable" : "invalid_request", error_description: e.message }, e.status);
       console.error(e);
       return oauthJson({ error: "server_error", error_description: "internal error" }, 500);
     }

@@ -1,14 +1,14 @@
 "use client";
 import { useState } from "react";
 import clsx from "clsx";
-import { Bot, Eye, Pencil } from "lucide-react";
+import { AlertTriangle, Bot, Eye, Pencil } from "lucide-react";
 import { api, ApiErr } from "@/lib/api";
 import { FormError } from "@/components/AuthShell";
 
 type Choice = "read" | "write";
 
-export function ConsentForm({ params, clientName, host, canWrite }: {
-  params: Record<string, string | undefined>; clientName: string; host: string; canWrite: boolean;
+export function ConsentForm({ params, clientName, host, knownHost, canWrite }: {
+  params: Record<string, string | undefined>; clientName: string; host: string; knownHost: boolean; canWrite: boolean;
 }) {
   const [choice, setChoice] = useState<Choice>("read");
   const [busy, setBusy] = useState(false);
@@ -40,6 +40,15 @@ export function ConsentForm({ params, clientName, host, canWrite }: {
           <div className="mt-0.5 text-ink-500">חזרה אל: <bdi dir="ltr" className="font-medium text-ink-700">{host}</bdi></div>
         </div>
       </div>
+      {!knownHost && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-[12.5px] text-red-800" data-testid="consent-unknown-host">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <span>
+            הגישה תישלח לכתובת <bdi dir="ltr" className="font-semibold">{host}</bdi>, שאינה של Claude או ChatGPT.
+            אשר רק אם אתה מכיר את הכלי הזה ובטוח שהגעת לכאן מתוכו — השם שמוצג למעלה נקבע ע״י הכלי עצמו וניתן לזיוף.
+          </span>
+        </div>
+      )}
       <div className="space-y-2" role="radiogroup" aria-label="רמת גישה">
         {opts.map((o) => (
           <button key={o.key} type="button" role="radio" aria-checked={choice === o.key} disabled={o.disabled || busy}

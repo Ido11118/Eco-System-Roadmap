@@ -3,6 +3,9 @@ import "server-only";
 // רישום לקוח אוטומטי (RFC 7591), Authorization Code + PKCE (S256 בלבד), מפתחות חידוש מתחלפים.
 // המפתחות נשמרים כ-Hash בלבד. הרשאות התוכן נקבעות תמיד לפי המשתמש — ה-scope רק מצמצם (קריאה / קריאה ועריכה).
 import crypto from "crypto";
+import dns from "dns";
+import https from "https";
+import type { LookupFunction } from "net";
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 import { db } from "@/db";
 import { oauthClients, oauthCodes, oauthGrants, oauthTokens, users } from "@/db/schema";
@@ -11,10 +14,11 @@ import {
   ACCESS_TTL_SEC, CODE_TTL_SEC, REFRESH_TTL_DAYS, SCOPES, accessOf, hashToken, newToken, parseScope, scopeFor,
   validRedirectUri, validResource, validScope, verifyPkce, type Access,
 } from "@/lib/oauth";
-import { CIMD_MAX_BYTES, isCimdClientId, loadCimd } from "@/lib/cimd";
+import { CIMD_MAX_BYTES, isCimdClientId, isPrivateIp, loadCimd } from "@/lib/cimd";
 import { loadMe } from "./auth";
 import { appUrl } from "./google";
 import { audit } from "./plan";
+import { rateLimit } from "./users";
 
 export const mcpUrl = () => `${appUrl()}/api/mcp`;
 
@@ -111,6 +115,7 @@ async function cimdClient(url: string) {
   const [cached] = await db.select().from(oauthClients).where(eq(oauthClients.id, url));
   if (cached && cached.fetchedAt && Date.now() - cached.fetchedAt.getTime() < CIMD_REFRESH_MS) return cached;
   try {
+    rateLimit("cimd-fetch", 60); // הגבלה כוללת על קריאות רשת למסמכי זיהוי (מונע ניצול השרת לשליחת בקשות / מילוי הטבלה)
     const c = await loadCimd(url, { lookup: lookupAll, fetchText: fetchDoc });
     const row = { id: url, name: c.name, redirectUris: c.redirectUris, authMethod: "none", secretHash: null, fetchedAt: new Date() };
     const [saved] = await db.insert(oauthClients).values(row)
@@ -127,11 +132,36 @@ async function lookupAll(host: string) {
   return (await lookup(host, { all: true })).map((a) => a.address);
 }
 
-async function fetchDoc(url: string) {
-  const r = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(5000), headers: { Accept: "application/json" } });
-  const len = Number(r.headers.get("content-length") ?? 0);
-  if (len > CIMD_MAX_BYTES) return { status: r.status, type: "", text: "x".repeat(CIMD_MAX_BYTES + 1) };
-  return { status: r.status, type: r.headers.get("content-type") ?? "", text: (await r.text()).slice(0, CIMD_MAX_BYTES + 1) };
+/**
+ * קריאת מסמך הזיהוי. הגנות SSRF:
+ * • כתובת ה-IP נבדקת ברגע ההתחברות עצמה (lookup מותאם) — לא רק בבדיקה מוקדמת. כך שרת DNS זדוני
+ *   לא יכול לענות בכתובת ציבורית בבדיקה ובכתובת פנימית בהתחברות (DNS rebinding).
+ * • בלי מעקב אחרי הפניות (תשובה 3xx נדחית), זמן מוגבל, וגוף מוגבל בגודל גם בלי content-length.
+ */
+function fetchDoc(url: string): Promise<{ status: number; type: string; text: string }> {
+  return new Promise((resolve, reject) => {
+    const lookup: LookupFunction = (host, opts, cb) => {
+      dns.lookup(host, opts, (err, address, family) => {
+        if (err) return cb(err, address, family);
+        const ips = Array.isArray(address) ? address.map((a) => a.address) : [address];
+        if (!ips.length || ips.some(isPrivateIp)) return cb(Object.assign(new Error("metadata document host is not allowed"), { code: "EBLOCKED" }), address, family);
+        cb(null, address, family);
+      });
+    };
+    const req = https.get(url, { lookup, timeout: 5000, headers: { Accept: "application/json" } }, (res) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      res.on("data", (c: Buffer) => {
+        size += c.length;
+        if (size > CIMD_MAX_BYTES) { req.destroy(); resolve({ status: res.statusCode ?? 0, type: "", text: "x".repeat(CIMD_MAX_BYTES + 1) }); return; }
+        chunks.push(c);
+      });
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, type: String(res.headers["content-type"] ?? ""), text: Buffer.concat(chunks).toString("utf8") }));
+      res.on("error", reject);
+    });
+    req.on("timeout", () => req.destroy(new Error("metadata document request timed out")));
+    req.on("error", reject);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -213,13 +243,14 @@ export async function tokenRequest(p: TokenParams, basic: { id: string; secret: 
 async function exchangeCode(clientId: string, p: TokenParams) {
   if (!p.code || !p.code_verifier) throw new OAuthError(400, "invalid_request", "code and code_verifier are required");
   if (!validResource(p.resource, mcpUrl())) throw new OAuthError(400, "invalid_target", "unknown resource");
+  // סימון הקוד כמשומש לפני כל בדיקה (ומחוץ לטרנזקציה): קוד שהוצג עם לקוח / כתובת / PKCE שגויים — נשרף ולא ניתן לנסות שוב.
+  // העדכון האטומי מבטיח שימוש יחיד גם בבקשות מקבילות
+  const [code] = await db.update(oauthCodes).set({ usedAt: new Date() })
+    .where(and(eq(oauthCodes.id, hashToken(p.code!)), isNull(oauthCodes.usedAt), gt(oauthCodes.expiresAt, new Date()))).returning();
+  if (!code || code.clientId !== clientId) throw new OAuthError(400, "invalid_grant", "invalid, expired or already used code");
+  if (p.redirect_uri !== undefined && p.redirect_uri !== code.redirectUri) throw new OAuthError(400, "invalid_grant", "redirect_uri mismatch");
+  if (!verifyPkce(p.code_verifier!, code.codeChallenge)) throw new OAuthError(400, "invalid_grant", "PKCE verification failed");
   return db.transaction(async (tx) => {
-    // סימון הקוד כמשומש באותה פעולה — קוד לא יכול לשמש פעמיים גם בבקשות מקבילות
-    const [code] = await tx.update(oauthCodes).set({ usedAt: new Date() })
-      .where(and(eq(oauthCodes.id, hashToken(p.code!)), isNull(oauthCodes.usedAt), gt(oauthCodes.expiresAt, new Date()))).returning();
-    if (!code || code.clientId !== clientId) throw new OAuthError(400, "invalid_grant", "invalid, expired or already used code");
-    if (p.redirect_uri !== undefined && p.redirect_uri !== code.redirectUri) throw new OAuthError(400, "invalid_grant", "redirect_uri mismatch");
-    if (!verifyPkce(p.code_verifier!, code.codeChallenge)) throw new OAuthError(400, "invalid_grant", "PKCE verification failed");
     const [u] = await tx.select({ status: users.status }).from(users).where(eq(users.id, code.userId));
     if (u?.status !== "APPROVED") throw new OAuthError(400, "invalid_grant", "user is not active");
     // חיבור אחד לכל משתמש + לקוח: חיבור מחדש מעדכן את החיבור הקיים (במקום לצבור חיבורים כפולים)
@@ -242,17 +273,26 @@ async function exchangeCode(clientId: string, p: TokenParams) {
 
 async function refresh(clientId: string, p: TokenParams) {
   if (!p.refresh_token) throw new OAuthError(400, "invalid_request", "refresh_token is required");
+  const id = hashToken(p.refresh_token);
+  // שימוש חוזר במפתח חידוש שכבר הוחלף = סימן לגניבה (OAuth 2.1 §4.3.1): מבטלים את החיבור כולו,
+  // כך שגם מי שגנב את המפתח וגם הלקוח המקורי מנותקים, והמשתמש יחבר מחדש
+  const [prev] = await db.select().from(oauthTokens).where(and(eq(oauthTokens.id, id), eq(oauthTokens.kind, "refresh")));
+  if (prev?.usedAt) {
+    await revokeGrant(prev.grantId);
+    const [g] = await db.select({ userId: oauthGrants.userId }).from(oauthGrants).where(eq(oauthGrants.id, prev.grantId));
+    if (g) await audit(db, g.userId, "ai_connection", prev.grantId, "revoke", { reason: "refresh_token_reuse" }, "חיבור AI נותק אוטומטית: זוהה שימוש חוזר במפתח חידוש");
+    throw new OAuthError(400, "invalid_grant", "refresh token was already used; the connection was revoked");
+  }
   return db.transaction(async (tx) => {
-    // מפתח חידוש חד-פעמי: נמחק עם השימוש ומוחלף בחדש (Rotation)
-    const [t] = await tx.delete(oauthTokens)
-      .where(and(eq(oauthTokens.id, hashToken(p.refresh_token!)), eq(oauthTokens.kind, "refresh"), gt(oauthTokens.expiresAt, new Date()))).returning();
+    // מפתח חידוש חד-פעמי: מסומן כמשומש (לזיהוי שימוש חוזר) ומוחלף בחדש (Rotation)
+    const [t] = await tx.update(oauthTokens).set({ usedAt: new Date() })
+      .where(and(eq(oauthTokens.id, id), eq(oauthTokens.kind, "refresh"), isNull(oauthTokens.usedAt), gt(oauthTokens.expiresAt, new Date()))).returning();
     if (!t) throw new OAuthError(400, "invalid_grant", "invalid or expired refresh token");
     const [g] = await tx.select({ grant: oauthGrants, status: users.status }).from(oauthGrants)
       .innerJoin(users, eq(users.id, oauthGrants.userId)).where(eq(oauthGrants.id, t.grantId));
     if (!g || g.grant.revokedAt || g.grant.clientId !== clientId || g.status !== "APPROVED") throw new OAuthError(400, "invalid_grant", "connection was revoked");
-    // ה-scope נקבע לפי החיבור (המשתמש יכול לשנות אותו ב"חיבורי AI"); בקשה לצמצם — מכובדת
-    const scope = p.scope && accessOf(p.scope) === "read" ? scopeFor("read") : g.grant.scope;
-    return issue(tx, g.grant.id, scope);
+    // ה-scope תמיד לפי החיבור (המשתמש קובע אותו ב"חיבורי AI", והוא חל על כל המפתחות) — מדווחים את מה שבאמת בתוקף
+    return issue(tx, g.grant.id, g.grant.scope);
   });
 }
 
@@ -338,6 +378,14 @@ export async function revokeConnection(me: Me, id: number) {
   await revokeGrant(id);
   await audit(db, me.id, "ai_connection", id, "revoke", null, "עוזר AI נותק");
   return true;
+}
+
+/** ניתוק כל חיבורי ה-AI של משתמש (בהשעיה / דחייה) — כדי שהחזרה לפעילות לא תחזיר בשקט חיבורים ישנים */
+export async function revokeUserGrants(tx: Tx, userId: number) {
+  const gs = await tx.update(oauthGrants).set({ revokedAt: new Date() })
+    .where(and(eq(oauthGrants.userId, userId), isNull(oauthGrants.revokedAt))).returning({ id: oauthGrants.id });
+  for (const g of gs) await tx.delete(oauthTokens).where(eq(oauthTokens.grantId, g.id));
+  return gs.length;
 }
 
 async function revokeGrant(id: number) {

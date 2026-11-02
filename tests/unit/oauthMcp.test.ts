@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import crypto from "crypto";
-import { accessOf, parseScope, scopeFor, validRedirectUri, validResource, validScope, verifyPkce } from "@/lib/oauth";
+import { accessOf, isKnownAiHost, parseScope, scopeFor, validRedirectUri, validResource, validScope, verifyPkce } from "@/lib/oauth";
 import { parseWeek, parseDate } from "@/lib/mcpFormat";
 
 describe("oauth helpers", () => {
@@ -59,7 +59,7 @@ describe("mcp week parsing", () => {
 });
 
 import { isCimdClientId, isPrivateIp, loadCimd, parseCimdDocument } from "@/lib/cimd";
-import { verifyIdTokenClaims, decodeJwtPayload } from "@/lib/googleClaims";
+import { verifyIdTokenClaims, decodeJwtPayload, googleOwnsEmail } from "@/lib/googleClaims";
 
 describe("client id metadata documents (CIMD)", () => {
   const url = "https://claude.ai/oauth/claude-code-client-metadata";
@@ -99,10 +99,18 @@ describe("client id metadata documents (CIMD)", () => {
 
 describe("google id token claims", () => {
   const cfg = { clientId: "cid.apps.googleusercontent.com", allowedDomains: [] as string[] };
-  const base = { iss: "https://accounts.google.com", aud: cfg.clientId, exp: Math.floor(Date.now() / 1000) + 600, nonce: "n1", email: "Dana@Org.com", email_verified: true, name: "דנה" };
+  const base = { iss: "https://accounts.google.com", aud: cfg.clientId, exp: Math.floor(Date.now() / 1000) + 600, nonce: "n1", sub: "1234567890", email: "Dana@Org.com", email_verified: true, name: "דנה" };
 
   it("accepts a valid token and normalizes the email", () => {
-    expect(verifyIdTokenClaims(base, cfg, "n1")).toEqual({ email: "dana@org.com", name: "דנה", hd: null });
+    expect(verifyIdTokenClaims(base, cfg, "n1")).toEqual({ sub: "1234567890", email: "dana@org.com", name: "דנה", hd: null });
+  });
+  it("requires the stable Google account id (sub)", () => {
+    expect(() => verifyIdTokenClaims({ ...base, sub: undefined }, cfg, "n1")).toThrow();
+  });
+  it("auto-links to an existing account only when Google owns the address (Workspace hd or Gmail)", () => {
+    expect(googleOwnsEmail({ email: "dana@org.com", hd: "org.com" })).toBe(true);
+    expect(googleOwnsEmail({ email: "dana@gmail.com", hd: null })).toBe(true);
+    expect(googleOwnsEmail({ email: "dana@org.com", hd: null })).toBe(false); // מייל ארגוני כחשבון Google פרטי
   });
   it("rejects wrong audience, issuer, nonce, expiry or unverified email", () => {
     expect(() => verifyIdTokenClaims({ ...base, aud: "other" }, cfg, "n1")).toThrow();
@@ -120,5 +128,12 @@ describe("google id token claims", () => {
   it("decodes the JWT payload", () => {
     const jwt = ["x", Buffer.from(JSON.stringify({ a: "ש" })).toString("base64url"), "sig"].join(".");
     expect(decodeJwtPayload(jwt)).toEqual({ a: "ש" });
+  });
+});
+
+describe("known AI redirect hosts (consent warning)", () => {
+  it("recognizes Claude / ChatGPT / localhost and flags anything else", () => {
+    for (const h of ["claude.ai", "www.claude.ai", "claude.com", "chatgpt.com", "localhost:6274", "127.0.0.1:3000"]) expect(isKnownAiHost(h)).toBe(true);
+    for (const h of ["evil.com", "claude.ai.evil.com", "notclaude.ai"]) expect(isKnownAiHost(h)).toBe(false);
   });
 });

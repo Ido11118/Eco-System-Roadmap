@@ -1,7 +1,16 @@
 // בדיקת תוכן ה-ID Token שמתקבל מ-Google (לוגיקה טהורה — נבדקת בבדיקות יחידה)
+
+/**
+ * האם Google הוא הגורם המוסמך לכתובת: חשבון Google Workspace של הארגון (יש hd), או Gmail.
+ * רק אז מקשרים אוטומטית לחשבון קיים לפי המייל. כתובת אחרת (למשל מייל ארגוני שנרשם כחשבון Google פרטי)
+ * יכולה להישאר אצל מי שהחזיק בה בעבר — לכן לא מקשרים אותה לבד לחשבון קיים.
+ */
+export function googleOwnsEmail(id: { email: string; hd: string | null }): boolean {
+  return !!id.hd || /@(gmail|googlemail)\.com$/.test(id.email);
+}
 const ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
 
-export type GoogleIdentity = { email: string; name: string; hd: string | null };
+export type GoogleIdentity = { sub: string; email: string; name: string; hd: string | null };
 
 export class ClaimsError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -25,7 +34,9 @@ export function verifyIdTokenClaims(c: Record<string, unknown>, cfg: { clientId:
   if (cfg.allowedDomains.length && !(hd && cfg.allowedDomains.includes(hd))) {
     throw new ClaimsError(403, `ניתן להתחבר רק עם חשבון Google ארגוני (${cfg.allowedDomains.map((d) => `@${d}`).join(", ")})`);
   }
+  const sub = typeof c.sub === "string" ? c.sub.trim() : "";
+  if (!sub || sub.length > 255) throw new ClaimsError(400, "תשובה לא תקינה מ-Google");
   const name = typeof c.name === "string" && c.name.trim() ? c.name.trim().slice(0, 120) : email.split("@")[0];
-  return { email, name, hd };
+  return { sub, email, name, hd };
 }
 

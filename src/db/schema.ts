@@ -61,8 +61,11 @@ export const users = pgTable("users", {
   updatedAt: ts("updated_at").notNull().defaultNow(),
   approvedAt: ts("approved_at"),
   approvedById: integer("approved_by_id"),
+  // מזהה החשבון ב-Google (sub) — קבוע גם אם כתובת המייל בחשבון משתנה; נשמר בהתחברות הראשונה עם Google
+  googleSub: varchar("google_sub", { length: 255 }),
 }, (t) => [
   uniqueIndex("users_email_uq").on(sql`lower(${t.email})`),
+  uniqueIndex("users_google_sub_uq").on(t.googleSub).where(sql`${t.googleSub} IS NOT NULL`),
   // רק Super User אחד במערכת
   uniqueIndex("users_one_super").on(t.role).where(sql`${t.role} = 'SUPER'`),
 ]);
@@ -329,6 +332,8 @@ export const oauthTokens = pgTable("oauth_tokens", {
   grantId: integer("grant_id").notNull().references(() => oauthGrants.id, { onDelete: "cascade" }),
   kind: varchar("kind", { length: 10 }).notNull(), // access | refresh
   expiresAt: ts("expires_at").notNull(),
+  // מפתח חידוש שכבר הוחלף: נשמר כדי לזהות שימוש חוזר (סימן לגניבה) — ואז החיבור כולו מבוטל
+  usedAt: ts("used_at"),
   createdAt: ts("created_at").notNull().defaultNow(),
 }, (t) => [
   index("oauth_tokens_grant_idx").on(t.grantId),

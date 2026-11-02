@@ -2,6 +2,7 @@
 // בדיקות קצה-לקצה: 25 התרחישים המחייבים (סעיף 22 באפיון) ובדיקות קשיחות נוספות (מקביליות, קלט זדוני, אבטחה).
 // הרצה מול שרת רץ: BASE_URL=http://localhost:3000 SUPERUSER_EMAIL=... SUPERUSER_PASSWORD=... npm run test:e2e
 // מומלץ להריץ מול בסיס נתונים ייעודי לבדיקות — הבדיקות יוצרות משתמשים ותכולות.
+import crypto from "crypto";
 import { chromium, devices, request, type APIRequestContext, type Browser, type Page } from "playwright";
 import { addWeeks, currentWeekIL, weekNumber } from "../../src/lib/weeks";
 import type { ItemDTO, PlanData, RowDTO, SprintDTO } from "../../src/lib/types";
@@ -1632,6 +1633,120 @@ async function main() {
     const ganttOrder = await pAdmin.locator(`[data-testid=gantt-body] [data-domain="${AGAM}"] [data-team]`).evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-team"))));
     assert(JSON.stringify(ganttOrder) === JSON.stringify(exp2), `gantt order ${JSON.stringify(ganttOrder)}`);
     await json(admin, "POST", "/api/admin/teams/order", { domainId: AGAM, teamIds: orig });
+  });
+
+  // 59 --------------------------------------------------------------
+  await scenario(59, "חיבור Claude דרך MCP: רישום, מסך אישור, קוד עם PKCE, כלים בהרשאות המשתמש, (דרך Claude) בהיסטוריה, זיהוי גניבת מפתח, קריאה בלבד, השעיה; הפניה בטוחה ו-Google", async () => {
+    const H = await ctx(); const uH = `h-${RUN}@test.local`;
+    await json(H, "POST", "/api/auth/register", { fullName: "משתמש ח", email: uH, password: PW, domainIds: [AGAM], requestCross: false });
+    const hId = await userId(uH);
+    await json(admin, "POST", `/api/admin/users/${hId}`, { action: "approve", domainIds: [AGAM], canEditCross: false });
+    await login(H, uH, PW);
+    // גילוי: מסמכי ההגדרות ו-401 עם הפניה אליהם
+    const prm = (await json<{ resource: string; authorization_servers: string[] }>(P, "GET", "/.well-known/oauth-protected-resource/api/mcp")).body;
+    assert(prm.resource === `${BASE}/api/mcp` && prm.authorization_servers?.length, `protected resource metadata: ${JSON.stringify(prm)}`);
+    const asm = (await json<{ token_endpoint: string; code_challenge_methods_supported: string[] }>(P, "GET", "/.well-known/oauth-authorization-server")).body;
+    assert(asm.token_endpoint === `${BASE}/api/oauth/token` && asm.code_challenge_methods_supported?.includes("S256"), `AS metadata: ${JSON.stringify(asm)}`);
+    const noAuth = await P.post("/api/mcp", { data: { jsonrpc: "2.0", id: 1, method: "tools/list" } });
+    assert(noAuth.status() === 401 && (noAuth.headers()["www-authenticate"] ?? "").includes("resource_metadata"), `unauthenticated MCP: ${noAuth.status()}`);
+    // רישום לקוח (כמו Claude) + לקוח "מתחזה" עם כתובת חזרה זרה
+    const CB = "https://claude.ai/api/mcp/auth_callback";
+    const reg = async (name: string, uri: string) => (await json<{ client_id: string }>(P, "POST", "/api/oauth/register", {
+      client_name: name, redirect_uris: [uri], token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"],
+    })).body.client_id;
+    const cid = await reg("Claude", CB), evil = await reg("Claude", "https://evil.example/cb");
+    assert(cid && evil, "client registration failed");
+    const pkce = () => { const v = crypto.randomBytes(32).toString("base64url"); return { v, c: crypto.createHash("sha256").update(v).digest("base64url") }; };
+    const authParams = (client: string, uri: string, c: string) => ({ response_type: "code", client_id: client, redirect_uri: uri, code_challenge: c, code_challenge_method: "S256", state: "st-1", scope: "plan:read plan:write", resource: `${BASE}/api/mcp` });
+    // מסך האישור בדפדפן: בחירת "קריאה ועריכה" ואישור → חזרה ל-Claude עם קוד
+    const pH = await uiLogin(browser, uH, PW);
+    const k1 = pkce();
+    await pH.goto(`${BASE}/oauth/authorize?${new URLSearchParams(authParams(evil, "https://evil.example/cb", k1.c))}`);
+    await pH.waitForSelector("[data-testid=consent-unknown-host]");
+    let back = "";
+    await pH.route("https://claude.ai/**", (r) => { back = r.request().url(); void r.fulfill({ status: 200, body: "ok" }); });
+    await pH.goto(`${BASE}/oauth/authorize?${new URLSearchParams(authParams(cid, CB, k1.c))}`);
+    await pH.waitForSelector("[data-testid=consent]");
+    assert(!(await pH.locator("[data-testid=consent-unknown-host]").count()), "warning shown for claude.ai");
+    await pH.click("[data-testid=consent] [data-value=write]");
+    await pH.click("[data-testid=consent-approve]");
+    for (let i = 0; i < 50 && !back; i++) await pH.waitForTimeout(100);
+    const cb = new URL(back);
+    assert(cb.searchParams.get("state") === "st-1" && cb.searchParams.get("code"), `callback: ${back}`);
+    const tok = async (form: Record<string, string>) => { const r = await P.post("/api/oauth/token", { form }); return { status: r.status(), body: await r.json() as { access_token: string; refresh_token: string; scope: string; error?: string } }; };
+    const codeForm = (code: string, v: string) => ({ grant_type: "authorization_code", code, code_verifier: v, client_id: cid, redirect_uri: CB, resource: `${BASE}/api/mcp` });
+    assert((await tok(codeForm(cb.searchParams.get("code")!, "wrong-verifier-wrong-verifier-wrong-verifier-123"))).status === 400, "wrong PKCE verifier accepted");
+    assert((await tok(codeForm(cb.searchParams.get("code")!, k1.v))).status === 400, "code still usable after a failed (wrong PKCE) attempt");
+    // קוד חדש דרך API מסך האישור (אותה בדיקה מלאה בשרת)
+    const freshCode = async (decision: "read" | "write") => {
+      const k = pkce();
+      const r = await json<{ redirect: string }>(H, "POST", "/api/oauth/authorize", { params: authParams(cid, CB, k.c), decision });
+      return { code: new URL(r.body.redirect).searchParams.get("code")!, v: k.v };
+    };
+    let c1 = await freshCode("write");
+    let t1 = await tok(codeForm(c1.code, c1.v));
+    assert(t1.status === 200 && t1.body.access_token && t1.body.scope.includes("plan:write"), `token: ${JSON.stringify(t1)}`);
+    assert((await tok(codeForm(c1.code, c1.v))).status === 400, "authorization code reused");
+    // MCP
+    const mcp = async (token: string, method: string, params: unknown = {}) => {
+      const r = await P.post("/api/mcp", { headers: { Authorization: `Bearer ${token}`, Accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18" }, data: { jsonrpc: "2.0", id: 1, method, params } });
+      return { status: r.status(), body: await r.json().catch(() => null) as { result?: { tools?: { name: string }[]; isError?: boolean; content?: { text: string }[] }; error?: { message: string } } | null };
+    };
+    const call = async (token: string, name: string, args: unknown) => {
+      const r = await mcp(token, "tools/call", { name, arguments: args });
+      const res = r.body?.result;
+      return { ok: !!res && !res.isError, text: res?.content?.[0]?.text ?? r.body?.error?.message ?? "", data: (() => { try { return JSON.parse(res?.content?.[0]?.text ?? "null"); } catch { return null; } })() };
+    };
+    const init = await mcp(t1.body.access_token, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "1" } });
+    assert(init.status === 200, `initialize: ${init.status} ${JSON.stringify(init.body)}`);
+    const tools = (await mcp(t1.body.access_token, "tools/list")).body?.result?.tools?.map((x) => x.name) ?? [];
+    assert(tools.includes("create_items") && tools.includes("get_overview") && !tools.some((n) => /delete|remove|purge/i.test(n)), `tools: ${tools.join(",")}`);
+    assert((await call(t1.body.access_token, "get_overview", {})).ok, "get_overview failed");
+    const mk = await call(t1.body.access_token, "create_items", { items: [{ name: `MCP-${RUN}`, team_id: T_AZ1, start: addWeeks(cw, 40), end: addWeeks(cw, 41) }] });
+    assert(mk.ok, `create_items: ${mk.text}`);
+    const created = (await json<PlanData>(H, "GET", "/api/plan")).body.items.find((i) => i.name === `MCP-${RUN}`);
+    assert(created && created.createdById === hId, "MCP item not created as the user");
+    const hist = (await json<{ summary: string }[]>(H, "GET", `/api/history?type=item&id=${created.id}`)).body.map((x) => x.summary).join(" | ");
+    assert(hist.includes("(דרך Claude)"), `history not tagged: ${hist}`);
+    assert(!(await call(t1.body.access_token, "create_items", { items: [{ name: "x", team_id: T_ESH, start: addWeeks(cw, 40), end: addWeeks(cw, 40) }] })).ok, "MCP wrote to a domain without permission");
+    const eshB = (await json<{ id: number }>(admin, "POST", "/api/backlog", { name: `אש-באקלוג-${RUN}`, domainId: ESH })).body;
+    const bl = await call(t1.body.access_token, "list_backlog", {});
+    assert(bl.ok && !(bl.data as { id: number }[]).some((b) => b.id === eshB.id), "MCP backlog leaked another domain");
+    // מפתח חידוש: החלפה, ושימוש חוזר במפתח הישן → כל החיבור מבוטל
+    const r1 = await tok({ grant_type: "refresh_token", refresh_token: t1.body.refresh_token, client_id: cid });
+    assert(r1.status === 200 && r1.body.access_token, `refresh: ${JSON.stringify(r1.body)}`);
+    assert((await mcp(r1.body.access_token, "tools/list")).status === 200, "refreshed token rejected");
+    assert((await tok({ grant_type: "refresh_token", refresh_token: t1.body.refresh_token, client_id: cid })).status === 400, "old refresh token reused");
+    assert((await mcp(r1.body.access_token, "tools/list")).status === 401, "connection not revoked after refresh-token reuse");
+    // חיבור חדש → מעבר לקריאה בלבד חל מיד
+    c1 = await freshCode("write"); t1 = await tok(codeForm(c1.code, c1.v));
+    const cl = (await json<{ mcpUrl: string; connections: { id: number; access: string; client: string }[] }>(H, "GET", "/api/me/connections")).body;
+    assert(cl.mcpUrl === `${BASE}/api/mcp`, `settings MCP url: ${cl.mcpUrl}`);
+    const conn = cl.connections.find((x) => x.access === "write")!;
+    assert(conn && cl.connections.length === 1, `connections in settings: ${JSON.stringify(cl.connections)}`);
+    await json(H, "PATCH", `/api/me/connections/${conn.id}`, { access: "read" });
+    const roTools = (await mcp(t1.body.access_token, "tools/list")).body?.result?.tools?.map((x) => x.name) ?? [];
+    assert(roTools.includes("get_overview") && !roTools.includes("create_items"), `read-only tools: ${roTools.join(",")}`);
+    assert(!(await call(t1.body.access_token, "create_items", { items: [{ name: "x", team_id: T_AZ1, start: addWeeks(cw, 45), end: addWeeks(cw, 45) }] })).ok, "write allowed on read-only connection");
+    // השעיה: מנתקת מיד, והחזרה לפעילות לא מחזירה את החיבור
+    await json(admin, "POST", `/api/admin/users/${hId}`, { action: "suspend" });
+    assert((await mcp(t1.body.access_token, "tools/list")).status === 401, "suspended user still connected");
+    await json(admin, "POST", `/api/admin/users/${hId}`, { action: "reactivate" });
+    assert((await mcp(t1.body.access_token, "tools/list")).status === 401, "reactivation restored the old AI connection");
+    // הפניה אחרי התחברות: רק לכתובת פנימית (גם עם Tab מקודד)
+    const H2 = await ctx(); await login(H2, uH, PW);
+    for (const bad of ["/\t/evil.com", "//evil.com", "/\\evil.com", "https://evil.com"]) {
+      const r = await H2.get(`/login?next=${encodeURIComponent(bad)}`, { maxRedirects: 0 });
+      assert(!(r.headers()["location"] ?? "").includes("evil.com"), `open redirect via next=${JSON.stringify(bad)}: ${r.headers()["location"]}`);
+    }
+    // Google: הפניה עם PKCE + nonce + state; next זדוני לא נשמר; state שגוי נדחה
+    const g = await P.get(`/api/auth/google?next=${encodeURIComponent("/\t/evil.com")}`, { maxRedirects: 0 });
+    const gl = new URL(g.headers()["location"] ?? "http://x");
+    assert(gl.host === "accounts.google.com" && gl.searchParams.get("code_challenge_method") === "S256" && gl.searchParams.get("nonce") && gl.searchParams.get("state"), `google start: ${gl}`);
+    assert(!decodeURIComponent(g.headers()["set-cookie"] ?? "").includes("evil.com"), "malicious next stored in the Google flow");
+    const gcb = await P.get(`/api/auth/google/callback?state=wrong&code=x`, { maxRedirects: 0 });
+    assert((gcb.headers()["location"] ?? "").includes("/login?error="), `google callback with bad state: ${gcb.headers()["location"]}`);
+    await pH.context().close();
   });
 
   await browser.close();

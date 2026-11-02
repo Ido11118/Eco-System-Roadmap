@@ -58,6 +58,13 @@ export function newToken(prefix: string): string {
 export const hashToken = (t: string) => crypto.createHash("sha256").update(t).digest("hex");
 
 /** תיאור קצר וידידותי של הלקוח למסך האישור: שם + הדומיין שאליו נחזור (קשה לזייף) */
+/** כתובות חזרה של עוזרי AI מוכרים — כל כתובת אחרת מסומנת במסך האישור באזהרה בולטת (שם הלקוח לבדו ניתן לזיוף) */
+const KNOWN_HOSTS = ["claude.ai", "claude.com", "anthropic.com", "chatgpt.com", "openai.com", "localhost", "127.0.0.1"];
+export function isKnownAiHost(host: string): boolean {
+  const h = host.replace(/:\d+$/, "").toLowerCase();
+  return KNOWN_HOSTS.some((k) => h === k || h.endsWith(`.${k}`));
+}
+
 export function redirectHost(u: string): string {
   try { return new URL(u).host; } catch { return u; }
 }

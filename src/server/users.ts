@@ -8,6 +8,7 @@ import { ApiError } from "./errors";
 import { audit } from "./plan";
 import { randomToken, sha256 } from "./auth";
 import { sendMail } from "./mail";
+import { revokeUserGrants } from "./oauth";
 
 // הגבלת קצב בסיסית בזיכרון (כלי פנימי, תהליך יחיד)
 const attempts = new Map<string, { n: number; until: number }>();
@@ -33,9 +34,13 @@ export function assertNotLimited(key: string, max: number) {
 /** כתובת הלקוח: רק כאשר TRUST_PROXY=true סומכים על X-Forwarded-For (פריסה מאחורי Reverse Proxy) */
 export function clientIp(headers: Headers) {
   if (process.env.TRUST_PROXY === "true") {
+    // X-Real-IP נקבע ע"י הפרוקסי (Railway). ב-X-Forwarded-For הערך השמאלי נשלט ע"י הלקוח (אפשר לזייף ולעקוף הגבלה) —
+    // לכן לוקחים את הימני, שהפרוקסי הוסיף
+    const real = headers.get("x-real-ip")?.trim();
+    if (real) return real;
     const xf = headers.get("x-forwarded-for");
-    if (xf) return xf.split(",")[0].trim();
-    return headers.get("x-real-ip") ?? "unknown";
+    if (xf) return xf.split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "unknown";
+    return "unknown";
   }
   return "direct";
 }
@@ -116,11 +121,13 @@ export async function adminUserAction(admin: Me, userId: number, a:
         await tx.update(users).set({ status: "REJECTED" }).where(eq(users.id, userId));
         await tx.update(approvalRequests).set({ decidedAt: new Date(), decidedById: admin.id }).where(eq(approvalRequests.userId, userId));
         await killSessions(tx);
+        await revokeUserGrants(tx, userId);
         await audit(tx, admin.id, "user", userId, "reject", { before }, `נדחה משתמש ${u.fullName}`);
         return { ok: true };
       case "suspend":
         await tx.update(users).set({ status: "SUSPENDED" }).where(eq(users.id, userId));
         await killSessions(tx);
+        await revokeUserGrants(tx, userId); // גם חיבורי ה-AI — החזרה לפעילות לא מחזירה אותם בשקט
         await audit(tx, admin.id, "user", userId, "suspend", { before }, `הושעה משתמש ${u.fullName}`);
         return { ok: true };
       case "reactivate":
