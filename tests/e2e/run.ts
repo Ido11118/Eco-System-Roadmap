@@ -1270,6 +1270,12 @@ async function main() {
     // ממשק: הדבקה עם פריט מורשה ופריט ללא הרשאה
     await pa.goto(`${BASE}/plan?view=gantt`); await pa.waitForSelector("[data-testid=gantt-view]");
     await pa.click("[data-testid=ai-import-open]");
+    // ברירת המחדל: לשונית חיבור Claude / ChatGPT, עם הכתובת והוראות לכל כלי
+    await pa.waitForSelector("[data-testid=ai-mcp]");
+    await pa.waitForFunction((u) => (document.querySelector("[data-testid=mcp-guide-url]") as HTMLInputElement | null)?.value === u, `${BASE}/api/mcp`, { timeout: 10000 });
+    for (const t of ["claude", "claude-org", "chatgpt", "claude-code"]) { await pa.click(`[data-testid=mcp-tool-${t}]`); await pa.waitForSelector(`[data-testid=mcp-steps-${t}]`); }
+    assert(!(await pa.locator("[data-testid=ai-import]").count()), "JSON flow shown by default");
+    await pa.click("[data-testid=ai-tab-json]");
     await pa.waitForSelector("[data-testid=ai-import]");
     await pa.click("[data-testid=ai-copy-prompt]").catch(() => {}); // ייתכן שהלוח חסום בדפדפן הבדיקה — לא מהותי
     const json1 = { format: "workplan-import/v1", items: [
@@ -1636,7 +1642,7 @@ async function main() {
   });
 
   // 59 --------------------------------------------------------------
-  await scenario(59, "חיבור Claude דרך MCP: רישום, מסך אישור, קוד עם PKCE, כלים בהרשאות המשתמש, (דרך Claude) בהיסטוריה, זיהוי גניבת מפתח, קריאה בלבד, השעיה; הפניה בטוחה ו-Google", async () => {
+  await scenario(59, "חיבור Claude דרך MCP: רישום, מסך אישור, קוד עם PKCE, כלים בהרשאות המשתמש, (דרך Claude) בהיסטוריה, זיהוי גניבת מפתח, קריאה בלבד, ניתוק ע\"י המנהל, השעיה; הפניה בטוחה ו-Google", async () => {
     const H = await ctx(); const uH = `h-${RUN}@test.local`;
     await json(H, "POST", "/api/auth/register", { fullName: "משתמש ח", email: uH, password: PW, domainIds: [AGAM], requestCross: false });
     const hId = await userId(uH);
@@ -1728,6 +1734,22 @@ async function main() {
     const roTools = (await mcp(t1.body.access_token, "tools/list")).body?.result?.tools?.map((x) => x.name) ?? [];
     assert(roTools.includes("get_overview") && !roTools.includes("create_items"), `read-only tools: ${roTools.join(",")}`);
     assert(!(await call(t1.body.access_token, "create_items", { items: [{ name: "x", team_id: T_AZ1, start: addWeeks(cw, 45), end: addWeeks(cw, 45) }] })).ok, "write allowed on read-only connection");
+    // ניהול מערכת ← חיבורי AI: המנהל רואה מי חיבר איזה כלי, ומנתק
+    assert((await json(H, "GET", "/api/admin/connections")).status === 403, "regular user can list all AI connections");
+    const all = (await json<{ id: number; userId: number; client: string; access: string }[]>(admin, "GET", "/api/admin/connections")).body;
+    const mine = all.find((x) => x.userId === hId);
+    assert(mine && mine.client === "Claude" && mine.access === "read", `admin connections: ${JSON.stringify(all)}`);
+    await pAdmin.goto(`${BASE}/admin`);
+    const card = pAdmin.locator(`[data-testid="user-card-${uH}"]`);
+    await card.locator(`[data-testid=admin-connection-${mine.id}]`).waitFor();
+    const connText = (await card.locator(`[data-testid=admin-connection-${mine.id}]`).innerText()).replace(/\s+/g, "");
+    assert(connText.includes("מחוברל-Claude") && connText.includes("קריאהבלבד"), `connection not shown on the user card: ${connText}`);
+    await pAdmin.click(`[data-testid=admin-connection-revoke-${mine.id}]`);
+    await pAdmin.locator("div[role=dialog]").last().getByRole("button", { name: "ניתוק", exact: true }).click();
+    await pAdmin.waitForSelector(`[data-testid=admin-connection-${mine.id}]`, { state: "detached" });
+    assert((await mcp(t1.body.access_token, "tools/list")).status === 401, "admin disconnect did not cut access");
+    c1 = await freshCode("write"); t1 = await tok(codeForm(c1.code, c1.v));
+    assert((await mcp(t1.body.access_token, "tools/list")).status === 200, "user cannot reconnect after admin disconnect");
     // השעיה: מנתקת מיד, והחזרה לפעילות לא מחזירה את החיבור
     await json(admin, "POST", `/api/admin/users/${hId}`, { action: "suspend" });
     assert((await mcp(t1.body.access_token, "tools/list")).status === 401, "suspended user still connected");

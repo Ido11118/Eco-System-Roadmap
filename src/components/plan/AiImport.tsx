@@ -1,9 +1,11 @@
 "use client";
-// "הוספת מופעים בעזרת AI": פרומפט מוכן להעתקה → שיחה חופשית בכלי AI → הדבקת JSON → תצוגה מקדימה ועריכה → אישור.
+// חלון ה-AI (הכפתור בתחתית סרגל הצד), שתי לשוניות:
+// • חיבור Claude / ChatGPT (MCP) — ברירת המחדל: כתובת והוראות חיבור; העוזר עובד ישירות מול המערכת.
+// • ייבוא JSON: פרומפט מוכן להעתקה → שיחה חופשית בכלי AI → הדבקת JSON → תצוגה מקדימה ועריכה → אישור.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Copy, Check, Trash2, AlertCircle, AlertTriangle, ChevronDown, Sparkles, Loader2, Lock } from "lucide-react";
+import { Copy, Check, Trash2, AlertCircle, AlertTriangle, ChevronDown, Sparkles, Loader2, Lock, Bot, Braces } from "lucide-react";
 import { api } from "@/lib/api";
 import { todayIL, isISODate, weekStartOf, weekEndOf, weekNumber, weekYear, fmtDate, fmtShort } from "@/lib/weeks";
 import {
@@ -15,17 +17,16 @@ import { Dialog, useConfirm } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { useCatalog } from "@/components/CatalogProvider";
 import { PLAN_KEY, type PlanStore } from "./store";
+import { McpGuide } from "./McpGuide";
 
-/** כפתור בסרגל הצד: גלוי רק למי שיש לו הרשאת עריכה כלשהי (בתוכנית החיה) */
+/** כפתור בסרגל הצד: לכל משתמש (חיבור MCP מתאים גם לצפייה בלבד); ייבוא JSON — רק למי שיש לו הרשאת עריכה */
 export function AiImportButton({ store }: { store: PlanStore }) {
   const [open, setOpen] = useState(false);
-  const data = store.data;
-  const canAny = !!data && (data.teams.some((t) => store.canEditTeam(t.id)) || store.canEditCross());
-  if (!canAny) return null;
+  if (!store.data) return null;
   return (
     <>
       {/* כפתור עגול בתחתית סרגל הצד (40px — נכנס גם כשהסרגל מכווץ) */}
-      <button onClick={() => setOpen(true)} data-testid="ai-import-open" aria-label="הוספה בעזרת AI" title="הוספה בעזרת AI — תכולות, אבני דרך, ספרינטים ופריטי באקלוג בשיחה עם כלי AI"
+      <button onClick={() => setOpen(true)} data-testid="ai-import-open" aria-label="עבודה עם AI" title="עבודה עם AI — חיבור Claude / ChatGPT, או ייבוא תכולות מ-JSON"
         className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-fuchsia-600 to-brand-600 text-white shadow-pop transition-transform duration-150 hover:scale-105 hover:from-fuchsia-700 hover:to-brand-700">
         <Sparkles size={18} />
       </button>
@@ -49,6 +50,7 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
   const [copied, setCopied] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<"mcp" | "json">("mcp"); // ברירת המחדל: חיבור Claude / ChatGPT
 
   const perms: ImportPerms = useMemo(() => ({
     canEditTeam: (id) => store.canEditTeam(id), canEditCross: () => store.canEditCross(), canEditDomain: (id) => store.canEditDomain(id),
@@ -65,8 +67,9 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
   }, [data, valid]);
 
   if (!data) return null;
+  const canAny = data.teams.some((t) => store.canEditTeam(t.id)) || store.canEditCross();
 
-  const reset = () => { setText(""); setParsedText(null); setEntries(null); setParseError(null); setShowPrompt(false); };
+  const reset = () => { setText(""); setParsedText(null); setEntries(null); setParseError(null); setShowPrompt(false); setTab("mcp"); };
   const close = async () => {
     if (entries?.length && !(await confirm({ title: "סגירת חלון הייבוא", text: "התצוגה המקדימה והשינויים שעשית בה יימחקו. לסגור?", confirm: "סגירה", danger: true }))) return;
     reset(); onClose();
@@ -115,9 +118,33 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
   };
 
   const byKind = (k: ImportKind) => checked.filter((c) => c.e.kind === k);
+  const tabs = (
+    <div className="-mt-1 mb-4 flex gap-1 border-b border-ink-200" role="tablist">
+      {([["mcp", "חיבור Claude / ChatGPT", Bot], ["json", "ייבוא JSON", Braces]] as const).map(([k, l, Icon]) => (
+        <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} data-testid={`ai-tab-${k}`}
+          className={clsx("-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] font-medium", tab === k ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500 hover:text-ink-900")}>
+          <Icon size={14} />{l}
+        </button>
+      ))}
+    </div>
+  );
+  if (tab === "mcp" || !canAny) {
+    return (
+      <Dialog open={open} onClose={() => void close()} width={tab === "mcp" ? 760 : 560}
+        title={<span className="flex items-center gap-2"><Sparkles size={17} className="text-fuchsia-600" />עבודה עם AI</span>}
+        footer={<button className="btn-secondary" onClick={() => void close()}>סגירה</button>}>
+        {tabs}
+        {tab === "mcp" ? <McpGuide /> : (
+          <p className="rounded-md bg-ink-50 px-3 py-3 text-[13px] text-ink-500" data-testid="ai-json-no-perms">
+            ייבוא JSON מוסיף תכולות לגאנט, ולכן זמין רק למי שיש לו הרשאת עריכה. אפשר לבקש הרשאות ב&quot;הגדרות&quot; (התפריט עם השם שלך למעלה). חיבור Claude / ChatGPT בקריאה בלבד — זמין לך.
+          </p>
+        )}
+      </Dialog>
+    );
+  }
   return (
     <Dialog open={open} onClose={() => void close()} width={1120}
-      title={<span className="flex items-center gap-2"><Sparkles size={17} className="text-fuchsia-600" />הוספת מופעים בעזרת AI</span>}
+      title={<span className="flex items-center gap-2"><Sparkles size={17} className="text-fuchsia-600" />עבודה עם AI</span>}
       footer={<>
         <button className="btn-primary" disabled={!!lockReason || busy} onClick={() => void submit()} data-testid="ai-import-submit" title={lockReason ?? undefined}>
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
@@ -129,7 +156,9 @@ export function AiImportDialog({ store, open, onClose }: { store: PlanStore; ope
           : invalidCount > 0 && <span className="text-[12px] text-red-600">{invalidCount} פריטים עם שגיאות לא ייובאו — תקן או מחק אותם</span>}
       </>}>
       {/* overflow-anchor: בלי "עיגון גלילה" של הדפדפן — אחרת פתיחת הפרומפט גוללת את החלון אל תיבת ההדבקה שבפוקוס */}
+      {tabs}
       <div className="space-y-4 text-[13px] [overflow-anchor:none]" data-testid="ai-import">
+        <p className="text-ink-500">בלי לחבר את העוזר למערכת: מנהלים שיחה בכלי AI כלשהו, מקבלים ממנו JSON ומדביקים כאן. מתאים גם לייבוא חד-פעמי מקובץ.</p>
         <Step n={1} title="העתק את הפרומפט ושלח אותו לכלי AI לבחירתך (ChatGPT, Claude, Gemini וכו')">
           <p className="text-ink-500">הפרומפט מסביר לכלי מה אפשר ליצור, אילו צוותים ותחומים פתוחים לעריכה עבורך, ואיך להחזיר את התוצאה.</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">

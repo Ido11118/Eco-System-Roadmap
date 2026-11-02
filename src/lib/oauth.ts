@@ -38,6 +38,24 @@ export function validRedirectUri(u: string): boolean {
   return url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 }
 
+/**
+ * האם כתובת החזרה שבבקשה תואמת לאחת הרשומות. התאמה מדויקת, ובכתובת מקומית (loopback: localhost / 127.0.0.1 / ::1 ב-http)
+ * — כל פורט מותר (RFC 8252 §7.3): אפליקציה מקומית כמו Claude Code פותחת פורט אקראי בכל התחברות,
+ * והרישום שלה (למשל http://localhost/callback) לא כולל פורט. שאר חלקי הכתובת חייבים להיות זהים.
+ */
+export function redirectUriMatches(registered: string[], requested: string): boolean {
+  if (registered.includes(requested)) return true;
+  let r: URL;
+  try { r = new URL(requested); } catch { return false; }
+  const loop = (u: URL) => u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+  if (!loop(r) || r.hash || r.username || r.password) return false;
+  return registered.some((x) => {
+    let g: URL;
+    try { g = new URL(x); } catch { return false; }
+    return loop(g) && g.hostname === r.hostname && g.pathname === r.pathname && g.search === r.search;
+  });
+}
+
 /** PKCE (S256): ה-verifier שנשלח עכשיו תואם לטביעת האצבע שנשלחה בתחילת התהליך */
 export function verifyPkce(verifier: string, challenge: string): boolean {
   if (!/^[A-Za-z0-9\-._~]{43,128}$/.test(verifier)) return false;

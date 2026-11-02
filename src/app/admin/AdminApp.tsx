@@ -9,6 +9,7 @@ import { TopBar } from "@/components/TopBar";
 import { AppShell } from "@/components/AppShell";
 import { CatalogSettings } from "./CatalogSettings";
 import { StructureSettings } from "./StructureSettings";
+import { UserAiConnections } from "./AdminAiConnections";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm, Dialog } from "@/components/ui/dialog";
 import { fmtTs } from "@/components/plan/ui";
@@ -229,6 +230,7 @@ function UserCard({ u, domains }: { u: AdminUser; domains: { id: number; name: s
           </div>
           <div className="text-[12.5px] text-ink-500" dir="ltr" style={{ textAlign: "right" }}>{u.email}</div>
           <div className="mt-1 text-[11.5px] text-ink-400">נרשם {fmtTs(u.createdAt)}{u.approvedAt ? ` · אושר ${fmtTs(u.approvedAt)}` : ""}</div>
+          {u.status !== "PENDING" && <UserAiConnections userId={u.id} userName={u.fullName} />}
           {u.request && (
             <div className="mt-2 text-[12px] text-ink-500">
               ביקש: {u.request.domainIds.length ? u.request.domainIds.map(name).join(", ") : "ללא תחומים"}{u.request.cross ? " + רוחבי" : ""}
@@ -287,7 +289,7 @@ function UserCard({ u, domains }: { u: AdminUser; domains: { id: number; name: s
 
 function AuditLog() {
   const q = useQuery({ queryKey: ["audit"], queryFn: () => api<{ id: number; at: string; entityType: string; entityId: string; action: string; summary: string; userName: string | null }[]>("GET", "/api/admin/audit?limit=500") });
-  const ET: Record<string, string> = { item: "תכולה", row: "שורה", milestone: "אבן דרך", sprint: "ספרינט", snapshot: "Snapshot", user: "משתמש", catalog: "הגדרות", import: "ייבוא AI", team: "צוות" };
+  const ET: Record<string, string> = { item: "תכולה", row: "שורה", milestone: "אבן דרך", sprint: "ספרינט", snapshot: "Snapshot", user: "משתמש", catalog: "הגדרות", import: "ייבוא AI", team: "צוות", backlog: "באקלוג", ai_connection: "חיבור AI" };
   return (
     <div className="card overflow-hidden">
       <table className="w-full text-[12.5px]">

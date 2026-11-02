@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import crypto from "crypto";
-import { accessOf, isKnownAiHost, parseScope, scopeFor, validRedirectUri, validResource, validScope, verifyPkce } from "@/lib/oauth";
+import { accessOf, isKnownAiHost, redirectUriMatches, parseScope, scopeFor, validRedirectUri, validResource, validScope, verifyPkce } from "@/lib/oauth";
 import { parseWeek, parseDate } from "@/lib/mcpFormat";
 
 describe("oauth helpers", () => {
@@ -135,5 +135,21 @@ describe("known AI redirect hosts (consent warning)", () => {
   it("recognizes Claude / ChatGPT / localhost and flags anything else", () => {
     for (const h of ["claude.ai", "www.claude.ai", "claude.com", "chatgpt.com", "localhost:6274", "127.0.0.1:3000"]) expect(isKnownAiHost(h)).toBe(true);
     for (const h of ["evil.com", "claude.ai.evil.com", "notclaude.ai"]) expect(isKnownAiHost(h)).toBe(false);
+  });
+});
+
+describe("redirect URI matching (RFC 8252 loopback)", () => {
+  const reg = ["http://localhost/callback", "http://127.0.0.1/callback", "https://claude.ai/api/mcp/auth_callback"];
+  it("accepts exact matches and any port on a registered loopback address (Claude Code)", () => {
+    expect(redirectUriMatches(reg, "https://claude.ai/api/mcp/auth_callback")).toBe(true);
+    expect(redirectUriMatches(reg, "http://localhost:54123/callback")).toBe(true);
+    expect(redirectUriMatches(reg, "http://127.0.0.1:61000/callback")).toBe(true);
+  });
+  it("rejects other paths, hosts, schemes and non-loopback ports", () => {
+    expect(redirectUriMatches(reg, "http://localhost:54123/other")).toBe(false);
+    expect(redirectUriMatches(reg, "http://evil.com:54123/callback")).toBe(false);
+    expect(redirectUriMatches(reg, "https://localhost:54123/callback")).toBe(false);
+    expect(redirectUriMatches(reg, "https://claude.ai:8443/api/mcp/auth_callback")).toBe(false);
+    expect(redirectUriMatches(["http://localhost/callback"], "http://127.0.0.1:5000/callback")).toBe(false);
   });
 });

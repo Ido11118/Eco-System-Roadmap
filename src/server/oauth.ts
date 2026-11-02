@@ -11,7 +11,7 @@ import { db } from "@/db";
 import { oauthClients, oauthCodes, oauthGrants, oauthTokens, users } from "@/db/schema";
 import type { Me } from "@/lib/types";
 import {
-  ACCESS_TTL_SEC, CODE_TTL_SEC, REFRESH_TTL_DAYS, SCOPES, accessOf, hashToken, newToken, parseScope, scopeFor,
+  ACCESS_TTL_SEC, CODE_TTL_SEC, redirectUriMatches, REFRESH_TTL_DAYS, SCOPES, accessOf, hashToken, newToken, parseScope, scopeFor,
   validRedirectUri, validResource, validScope, verifyPkce, type Access,
 } from "@/lib/oauth";
 import { CIMD_MAX_BYTES, isCimdClientId, isPrivateIp, loadCimd } from "@/lib/cimd";
@@ -182,7 +182,7 @@ export async function validateAuthorize(p: Record<string, string | undefined>):
   const client = await getClient(p.client_id);
   if (!client) return { ok: false, message: "הלקוח שביקש את החיבור אינו מוכר. נסה להוסיף את החיבור מחדש בעוזר ה-AI." };
   const redirectUri = p.redirect_uri ?? (client.redirectUris.length === 1 ? client.redirectUris[0] : "");
-  if (!client.redirectUris.includes(redirectUri)) return { ok: false, message: "כתובת החזרה של הלקוח אינה תואמת לרישום שלו." };
+  if (!redirectUri || !redirectUriMatches(client.redirectUris, redirectUri)) return { ok: false, message: "כתובת החזרה של הלקוח אינה תואמת לרישום שלו." };
   const back = (error: string, description: string) => ({ ok: false as const, redirect: redirectWith(redirectUri, { error, error_description: description, state: p.state ?? null }) });
   if (p.response_type !== "code") return back("unsupported_response_type", "only response_type=code is supported");
   if (!p.code_challenge || p.code_challenge_method !== "S256") return back("invalid_request", "PKCE with code_challenge_method=S256 is required");
@@ -369,6 +369,38 @@ export async function setConnectionAccess(me: Me, id: number, access: Access) {
   if (!g) return false;
   await db.update(oauthGrants).set({ scope: scopeFor(access) }).where(eq(oauthGrants.id, id));
   await audit(db, me.id, "ai_connection", id, "update", { access }, `הרשאת עוזר AI שונתה ל${access === "write" ? "קריאה ועריכה" : "קריאה בלבד"}`);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// ניהול מערכת: כל חיבורי ה-AI הפעילים של כל המשתמשים, וניתוק
+// ---------------------------------------------------------------------------
+
+export type AdminConnectionDTO = ConnectionDTO & { userId: number; userName: string; userEmail: string; userStatus: string };
+
+export async function listAllConnections(admin: Me): Promise<AdminConnectionDTO[]> {
+  if (admin.role !== "SUPER") throw new OAuthError(403, "access_denied", "admin only");
+  const rows = await db.select({ g: oauthGrants, name: oauthClients.name, uName: users.fullName, uEmail: users.email, uStatus: users.status })
+    .from(oauthGrants)
+    .innerJoin(oauthClients, eq(oauthClients.id, oauthGrants.clientId))
+    .innerJoin(users, eq(users.id, oauthGrants.userId))
+    .where(isNull(oauthGrants.revokedAt));
+  return rows.sort((a, b) => (b.g.lastUsedAt ?? b.g.createdAt).getTime() - (a.g.lastUsedAt ?? a.g.createdAt).getTime()).map((r) => ({
+    id: r.g.id, client: r.name, access: accessOf(r.g.scope), createdAt: r.g.createdAt.toISOString(), lastUsedAt: r.g.lastUsedAt?.toISOString() ?? null,
+    userId: r.g.userId, userName: r.uName, userEmail: r.uEmail, userStatus: r.uStatus,
+  }));
+}
+
+export async function adminRevokeConnection(admin: Me, id: number) {
+  if (admin.role !== "SUPER") throw new OAuthError(403, "access_denied", "admin only");
+  const [row] = await db.select({ g: oauthGrants, name: oauthClients.name, uName: users.fullName }).from(oauthGrants)
+    .innerJoin(oauthClients, eq(oauthClients.id, oauthGrants.clientId))
+    .innerJoin(users, eq(users.id, oauthGrants.userId))
+    .where(and(eq(oauthGrants.id, id), isNull(oauthGrants.revokedAt)));
+  if (!row) return false;
+  await revokeGrant(id);
+  await audit(db, admin.id, "ai_connection", id, "revoke", { userId: row.g.userId, client: row.name, byAdmin: true },
+    `מנהל המערכת ניתק את ${row.name} של ${row.uName}`);
   return true;
 }
 
