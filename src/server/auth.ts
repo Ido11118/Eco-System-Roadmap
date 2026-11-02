@@ -1,5 +1,6 @@
 import "server-only";
 import crypto from "crypto";
+import { appUrlFromEnv } from "@/lib/appUrl";
 import { cookies } from "next/headers";
 import { and, eq, gt, lt } from "drizzle-orm";
 import { db } from "@/db";
@@ -15,7 +16,7 @@ export const randomToken = () => crypto.randomBytes(32).toString("base64url");
 
 export function secureCookies() {
   if (process.env.COOKIE_SECURE) return process.env.COOKIE_SECURE === "true";
-  return (process.env.APP_URL ?? "").startsWith("https://");
+  return !!process.env.APP_URL && appUrlFromEnv().startsWith("https://");
 }
 
 export async function createSession(userId: number) {

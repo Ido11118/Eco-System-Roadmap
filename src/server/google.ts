@@ -8,6 +8,7 @@ import { db } from "@/db";
 import { approvalRequests, users } from "@/db/schema";
 import { audit } from "./plan";
 import { ApiError } from "./errors";
+import { appUrlFromEnv } from "@/lib/appUrl";
 import { ClaimsError, decodeJwtPayload, googleOwnsEmail, verifyIdTokenClaims, type GoogleIdentity } from "@/lib/googleClaims";
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -25,7 +26,7 @@ export function googleConfig(): GoogleConfig | null {
 }
 
 export function appUrl(): string {
-  return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+  return appUrlFromEnv(); // מנורמל: משלים https:// אם חסר, בלי "/" בסוף
 }
 
 export const googleRedirectUri = () => `${appUrl()}/api/auth/google/callback`;

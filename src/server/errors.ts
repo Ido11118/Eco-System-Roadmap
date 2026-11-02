@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { ZodError } from "zod";
+import { appUrlFromEnv } from "@/lib/appUrl";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public data?: unknown) {
@@ -9,7 +10,7 @@ export class ApiError extends Error {
 
 /** הכתובת הציבורית של המערכת (APP_URL) — מקור מורשה גם כשה-Reverse Proxy משנה את כותרת Host */
 function appHost(): string | null {
-  try { return process.env.APP_URL ? new URL(process.env.APP_URL).host : null; } catch { return null; }
+  try { return process.env.APP_URL ? new URL(appUrlFromEnv()).host : null; } catch { return null; }
 }
 
 /** בדיקת מקור הבקשה לפעולות משנות (הגנת CSRF בנוסף ל-SameSite) */

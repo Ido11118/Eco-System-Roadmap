@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { approvalRequests, passwordResetTokens, userDomainPermissions, users, domains, sessions } from "@/db/schema";
 import type { Me } from "@/lib/types";
 import { ApiError } from "./errors";
+import { appUrlFromEnv } from "@/lib/appUrl";
 import { audit } from "./plan";
 import { randomToken, sha256 } from "./auth";
 import { sendMail } from "./mail";
@@ -157,7 +158,7 @@ function escapeHtml(s: string) {
 }
 
 function appUrl() {
-  return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return appUrlFromEnv();
 }
 
 export function resetLinkFor(token: string) {
