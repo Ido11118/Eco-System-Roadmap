@@ -6,7 +6,7 @@ import {
   Plus, MoreVertical, Trash2, ArrowUpToLine, ArrowDownToLine, Diamond, Flag, ExternalLink, PanelTopOpen, Pencil, Eye, EyeOff, X, RectangleHorizontal,
 } from "lucide-react";
 import type { ItemDTO, MilestoneDTO, PlanData, RowDTO, SprintDTO, ViewConfig } from "@/lib/types";
-import { CROSS_ROW_LABELS, DELETED_RETENTION_DAYS } from "@/lib/constants";
+import { CROSS_ROW_LABELS } from "@/lib/constants";
 import { useCatalog } from "@/components/CatalogProvider";
 import {
   buildTimeline, dayOfWeek, fmtDate, addDays, weekEndOf, weekRangeLabel, weekNumber, weekStartOf, daysDiff,
@@ -25,10 +25,13 @@ import { CROSS_FILTER, crossRowVisible, hasContentFilter, hideDomain, hideTeam, 
 import { useToast } from "@/components/ui/toast";
 import { GanttGrid, useCurrentWeek, type CrossGroup, type GanttGridHandle, type LaneSpec } from "./GanttGrid";
 import { geometry, fitsTwoLines } from "./geometry";
+import { batchOverlap, shiftedEntries } from "@/lib/itemBatch";
+import { SelectionBar, ItemActionsMenu } from "@/components/plan/ItemSelection";
 import { DepBadge, DepList } from "@/components/plan/Dependencies";
 
 type DragState = {
   item: ItemDTO;
+  items: ItemDTO[];
   mode: "move" | "start" | "end";
   originX: number;
   originY: number;
@@ -187,7 +190,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     let dWeeks = Math.round(dx / (weekW * uiZoom()));
     let targetRowId = d.item.rowId;
     const origRow = data.rows.find((r) => r.id === d.item.rowId);
-    if (d.mode === "move" && origRow?.kind === "TEAM") {
+    if (d.mode === "move" && d.items.length === 1 && origRow?.kind === "TEAM") {
       const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-lane-row]");
       const rid = Number(el?.dataset.laneRow);
       const r = data.rows.find((x) => x.id === rid);
@@ -197,11 +200,22 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     if (d.mode === "end") dWeeks = Math.max(dWeeks, -Math.round(daysDiff(d.item.startWeek, d.item.endWeek) / 7));
     const { start, end } = dragRange(d.item, d.mode, dWeeks);
     let valid = true, reason: string | undefined;
-    const target = data.rows.find((r) => r.id === targetRowId);
-    if (!store.canEditRow(target)) { valid = false; reason = "אין הרשאת עריכה לשורה זו"; }
-    else {
-      const clash = findOverlap(data, targetRowId, start, end, d.item.id);
-      if (clash) { valid = false; reason = `חופף ל"${clash.name}"`; }
+    if (d.items.length > 1) {
+      const entries = shiftedEntries(d.items, dWeeks);
+      const moved = d.items.map((i, n) => ({ ...i, ...entries[n].patch }));
+      if (d.items.some((i) => !store.canEditRow(data.rows.find((r) => r.id === i.rowId)))) {
+        valid = false; reason = "אין הרשאת עריכה לכל התכולות שנבחרו";
+      } else {
+        const clash = batchOverlap(data, moved);
+        if (clash) { valid = false; reason = `הפעולה כולה תיחסם: חופף ל"${clash.name}"`; }
+      }
+    } else {
+      const target = data.rows.find((r) => r.id === targetRowId);
+      if (!store.canEditRow(target)) { valid = false; reason = "אין הרשאת עריכה לשורה זו"; }
+      else {
+        const clash = findOverlap(data, targetRowId, start, end, d.item.id);
+        if (clash) { valid = false; reason = `חופף ל"${clash.name}"`; }
+      }
     }
     return { ...d, started, dWeeks, targetRowId, valid, reason };
   }, [weekW]);
@@ -215,7 +229,9 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
       if (!d0) return;
       const d = computeDrag(d0, e.clientX, e.clientY);
       if (!d.started) { openSummary(d.item, e.clientX, e.clientY); return; }
-      if (!d.valid || (d.dWeeks === 0 && d.targetRowId === d.item.rowId)) return;
+      if (!d.valid) { toast.show("error", d.reason ?? "לא ניתן להשלים את ההזזה"); return; }
+      if (d.dWeeks === 0 && d.targetRowId === d.item.rowId) return;
+      if (d.items.length > 1) { void liveRef.current.store.shiftItems(d.items, d.dWeeks); return; }
       const { start, end } = dragRange(d.item, d.mode, d.dWeeks);
       const patch: Parameters<PlanStore["updateItem"]>[1] = {};
       if (start !== d.item.startWeek) patch.startWeek = start;
@@ -312,8 +328,9 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   const onLaneContextMenu = useCallback((e: React.MouseEvent, lane: LaneSpec, teamId: number | null, wi: number) => {
     const barEl = (e.target as HTMLElement).closest<HTMLElement>("[data-bar]");
     const item = barEl ? data.items.find((i) => i.id === Number(barEl.dataset.bar)) : undefined;
+    if (!item || !ui.selectedItems.has(item.id)) ui.setSelectedItems(new Set());
     openMenu({ x: e.clientX, y: e.clientY, lane, teamId, week: wi >= 0 && wi < n ? timeline.weeks[wi].start : undefined, item });
-  }, [data.items, n, timeline]);
+  }, [data.items, n, timeline, ui, openMenu]);
 
   // ---------- רינדור קוביות ----------
   const startDrag = (e: React.MouseEvent, item: ItemDTO, mode: DragState["mode"], editable: boolean) => {
@@ -323,8 +340,14 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     (document.activeElement as HTMLElement | null)?.blur?.();
     e.preventDefault();
     tip.hide();
-    if (!editable) return; // ללא הרשאה אין גרירה — הלחיצה מטופלת ב-onClick
-    setDrag({ item, mode, originX: e.clientX, originY: e.clientY, started: false, dWeeks: 0, targetRowId: item.rowId, valid: true });
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      if (editable) ui.setSelectedItems((s) => { const n = new Set(s); if (n.has(item.id)) n.delete(item.id); else n.add(item.id); return n; });
+      return;
+    }
+    if (!ui.selectedItems.has(item.id)) ui.setSelectedItems(new Set());
+    if (!editable) return;
+    const items = mode === "move" && ui.selectedItems.has(item.id) ? data.items.filter((i) => ui.selectedItems.has(i.id)) : [item];
+    setDrag({ item, items, mode, originX: e.clientX, originY: e.clientY, started: false, dWeeks: 0, targetRowId: item.rowId, valid: true });
   };
 
   const itemTip = (i: ItemDTO) => (
@@ -343,12 +366,14 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     if (!box) return null;
     const m = cat.status(i.status);
     const dim = filtering && !matches(i);
-    const isDragged = drag?.started && drag.item.id === i.id && !opts?.ghost;
-    const selected = ui.selectedItemId === i.id;
+    const isDragged = drag?.started && drag.items.some((x) => x.id === i.id) && !opts?.ghost;
+    const selected = ui.selectedItems.has(i.id) || ui.selectedItemId === i.id;
     const twoLines = fitsTwoLines(height - 6, barFont);
     return (
       <div key={opts?.ghost ? `g${i.id}` : i.id}
         data-bar={opts?.ghost ? undefined : i.id}
+        data-selected={!opts?.ghost && ui.selectedItems.has(i.id) || undefined}
+        aria-pressed={opts?.ghost ? undefined : ui.selectedItems.has(i.id)}
         className={clsx("gantt-bar group/bar absolute z-10 flex items-center overflow-clip rounded-[5px] border text-[12px] font-medium",
           editable ? "cursor-grab" : "cursor-pointer",
           opts?.ghost && "pointer-events-none !z-30 shadow-pop",
@@ -362,16 +387,16 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         onMouseDown={(e) => startDrag(e, i, "move", editable)}
         onMouseMove={(e) => { if (!drag && summary?.itemId !== i.id) tip.show(itemTip(i), e, { delay: 600 }); }}
         onMouseLeave={tip.hide}
-        onClick={editable ? undefined : (e) => openSummary(i, e.clientX, e.clientY)}
-        onDoubleClick={() => openFull(i.id)}
+        onClick={editable ? undefined : (e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey) openSummary(i, e.clientX, e.clientY); }}
+        onDoubleClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey) openFull(i.id); }}
         role={opts?.ghost ? undefined : "button"} tabIndex={opts?.ghost ? undefined : 0}
         aria-label={opts?.ghost ? undefined : `${i.name}, ${cat.status(i.status).label}, שבועות ${weekNumber(i.startWeek)}–${weekNumber(i.endWeek)}`}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ui.openItem(i.id); } }}>
         {/* ידיות שינוי אורך — לא בקצה שנחתך ע"י חלון הזמן (הקצה האמיתי מחוץ לתצוגה) */}
-        {editable && !opts?.ghost && !box.cutStart && (
+        {editable && !opts?.ghost && ui.selectedItems.size < 2 && !box.cutStart && (
           <span className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize opacity-0 group-hover/bar:opacity-100 bg-black/10" onMouseDown={(e) => startDrag(e, i, "start", true)} />
         )}
-        {editable && !opts?.ghost && !box.cutEnd && (
+        {editable && !opts?.ghost && ui.selectedItems.size < 2 && !box.cutEnd && (
           <span className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize opacity-0 group-hover/bar:opacity-100 bg-black/10" onMouseDown={(e) => startDrag(e, i, "end", true)} />
         )}
         {/* השם "נדבק" לקצה הגלוי: גם כשתחילת הקובייה גלולה מתחת לעמודות התחום/צוות, הטקסט נשאר גלוי עד שהקובייה נעלמת */}
@@ -419,11 +444,16 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         </button>,
       );
     }
-    const ghostHere = drag?.started && drag.targetRowId === lane.rowId &&
-      (teamId === null ? (crossLayout.laneItems.get(lane.key) ?? []).some((i) => i.id === drag.item.id) : lane.isRowStart);
-    if (drag?.started && ghostHere) {
-      const { start, end } = dragRange(drag.item, drag.mode, drag.dWeeks);
-      out.push(renderBar(drag.item, true, lane.height, { ghost: true, start, end, invalid: !drag.valid }));
+    if (drag?.started) {
+      for (const item of drag.items) {
+        const targetRowId = drag.items.length > 1 ? item.rowId : drag.targetRowId;
+        const ghostHere = targetRowId === lane.rowId && (teamId === null
+          ? (crossLayout.laneItems.get(lane.key) ?? []).some((i) => i.id === item.id) : lane.isRowStart);
+        if (ghostHere) {
+          const { start, end } = dragRange(item, drag.mode, drag.dWeeks);
+          out.push(renderBar(item, true, lane.height, { ghost: true, start, end, invalid: !drag.valid }));
+        }
+      }
     }
     // אבני דרך רוחביות בשורת "מופעים רוחביים"
     if (teamId === null && view.showMilestones && row?.kind === "CROSS_EVENT" && lane.isRowStart && lane.rowIndex === 0) {
@@ -561,7 +591,12 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   };
 
   return (
-    <div className="relative h-full" data-testid="gantt-view">
+    <div className="relative flex h-full flex-col" data-testid="gantt-view" onMouseDownCapture={(e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-testid="gantt-scroll"]') && !target.closest("[data-bar], [data-marker], button, input, select, textarea")) ui.setSelectedItems(new Set());
+    }}>
+      <SelectionBar store={store} />
+      <div className="min-h-0 flex-1">
       <GanttGrid ref={gridRef} timeline={timeline} weekW={weekW} domains={data.domains} teams={teams}
         teamLanes={teamLanes} crossGroups={crossLayout.groups} todayIndex={todayIndex}
         renderLane={renderLane} renderTeamOverlay={renderTeamOverlay} renderTeamMarkers={renderTeamMarkers} renderBodyOverlay={renderBodyOverlay}
@@ -571,6 +606,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         onLaneMouseDown={store.readOnly || mobile ? undefined : onLaneMouseDown} onLaneContextMenu={onLaneContextMenu}
         panMode={store.readOnly && !mobile}
         onLabelContextMenu={setView ? (e, domainId, teamId) => openMenu({ x: e.clientX, y: e.clientY, teamId, label: { domainId, teamId } }) : undefined} />
+      </div>
 
       {drag?.started && !drag.valid && drag.reason && (
         <div className="pointer-events-none fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-md bg-red-600 px-3 py-1.5 text-[12px] text-white shadow-pop">{drag.reason}</div>
@@ -623,7 +659,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
 
       <Floating open={!!menu} point={menu ? { x: menu.x, y: menu.y } : undefined} onClose={() => setMenu(null)}>
         {menu && (
-          <div className="w-[230px] p-1" onClick={() => setMenu(null)} data-testid="gantt-menu">
+          <div className={clsx("p-1", menu.item ? "w-[258px]" : "w-[230px]")} onClick={() => setMenu(null)} data-testid="gantt-menu">
             {menu.label && setView ? (
               <LabelMenu label={menu.label} data={data} view={view} setView={setView} toast={toast} />
             ) : menu.milestone ? (() => {
@@ -642,28 +678,10 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
               <SprintMenu sprint={menu.sprint} store={store} onEdit={(sp) => ui.openSprint(sp)}
                 onNext={(pre) => ui.openSprint(null, pre)} confirm={confirm} />
             ) : menu.item ? (
-              <>
-                <MenuItem icon={<ExternalLink size={14} />} onClick={() => ui.openItem(menu.item!.id)}>פתח פרטי תכולה</MenuItem>
-                {store.canEditRow(data.rows.find((r) => r.id === menu.item!.rowId)) && (
-                  <>
-                    <div className="my-1 border-t border-ink-100" />
-                    <div className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold text-ink-400">שינוי סטטוס</div>
-                    <div className="grid grid-cols-2 gap-0.5 px-1">
-                      {cat.statuses.map(({ key: s }) => (
-                        <button key={s} onClick={() => void store.updateItem(menu.item!, { status: s })}
-                          className={clsx("flex items-center gap-1.5 rounded px-1.5 py-1 text-start text-[12px] hover:bg-ink-100", menu.item!.status === s && "bg-ink-100 font-semibold")}>
-                          <span className="h-2.5 w-2.5 shrink-0 rounded-sm border" style={{ background: cat.status(s).bg, borderColor: cat.status(s).border }} />
-                          <span className="truncate">{cat.status(s).label}</span>
-                        </button>
-                      ))}
-                    </div>
-                    <div className="my-1 border-t border-ink-100" />
-                    <MenuItem danger icon={<Trash2 size={14} />} onClick={async () => {
-                      if (await confirm({ title: "מחיקת תכולה", confirm: "מחיקה", danger: true, text: <>האם אתה בטוח שברצונך למחוק את &quot;{menu.item!.name}&quot;?<span className="mt-1.5 block text-[12px] text-ink-500">אם תרצה לשחזר, התכולה תהיה זמינה ב-{DELETED_RETENTION_DAYS} הימים הקרובים תחת &quot;תכולות שנמחקו&quot; (עם אותו ID).</span></> })) await store.deleteItem(menu.item!);
-                    }}>מחיקת תכולה</MenuItem>
-                  </>
-                )}
-              </>
+              <ItemActionsMenu menu={{
+                items: ui.selectedItems.has(menu.item.id) ? data.items.filter((i) => ui.selectedItems.has(i.id)) : [menu.item],
+                one: { item: menu.item, editable: store.canEditRow(data.rows.find((r) => r.id === menu.item!.rowId)) },
+              }} store={store} onOpen={ui.openItem} onDone={() => setMenu(null)} onDeleted={() => ui.setSelectedItems(new Set())} />
             ) : (
               <>
                 {menu.lane?.editable && menu.week && (

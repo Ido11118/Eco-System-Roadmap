@@ -30,6 +30,8 @@ type UI = {
   me: Me;
   openItem: (id: number) => void;
   selectedItemId: number | null;
+  selectedItems: Set<number>;
+  setSelectedItems: React.Dispatch<React.SetStateAction<Set<number>>>;
   openNewItem: (p?: NewItemPrefill) => void;
   openMilestone: (m: MilestoneDTO | null, prefill?: MsPrefill) => void;
   openSprint: (s: SprintDTO | null, prefill?: SprintPrefill) => void;
@@ -132,6 +134,25 @@ export function WorkspaceUIProvider({ store, me, children, placing, onScheduled 
   onScheduled?: (it: ItemDTO, onGantt: boolean) => void;
 }) {
   const [itemId, setItemId] = useState<number | null>(null);
+  const closeItem = useCallback(() => setItemId(null), []);
+  const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
+  useEffect(() => { setSelectedItems(new Set()); }, [store.kind, store.readOnly]);
+  useEffect(() => {
+    if (!store.data) return;
+    const ids = new Set(store.data.items.map((i) => i.id));
+    setSelectedItems((s) => [...s].some((id) => !ids.has(id)) ? new Set([...s].filter((id) => ids.has(id))) : s);
+  }, [store.data]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      // Let panels/popovers handle this event before selection changes rerender
+      // their effects and replace their key listeners.
+      if (e.key === "Escape" && !document.querySelector("[role=dialog]")) {
+        queueMicrotask(() => setSelectedItems((s) => s.size ? new Set() : s));
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
   const [newItem, setNewItem] = useState<NewItemPrefill | null>(null);
   const [ms, setMs] = useState<{ m: MilestoneDTO | null; prefill?: MsPrefill } | null>(null);
   const [sp, setSp] = useState<{ s: SprintDTO | null; prefill?: SprintPrefill } | null>(null);
@@ -139,17 +160,18 @@ export function WorkspaceUIProvider({ store, me, children, placing, onScheduled 
     me,
     openItem: (id) => setItemId(id),
     selectedItemId: itemId,
+    selectedItems, setSelectedItems,
     openNewItem: (p) => setNewItem(placing && !p?.backlog
       ? { ...p, teamId: p?.teamId ?? placing.teamId, name: placing.name, priority: placing.priority, notes: placing.notes, backlog: { id: placing.id, version: placing.version, onGantt: true } }
       : p ?? {}),
     openMilestone: (m, prefill) => setMs({ m, prefill }),
     openSprint: (s, prefill) => setSp({ s, prefill }),
     placing: placing ?? null,
-  }), [itemId, me, placing]);
+  }), [itemId, me, placing, selectedItems]);
   return (
     <UICtx.Provider value={ui}>
       {children}
-      {itemId !== null && <ItemPanel key={itemId} store={store} id={itemId} onClose={() => setItemId(null)} />}
+      {itemId !== null && <ItemPanel key={itemId} store={store} id={itemId} onClose={closeItem} />}
       {newItem && <NewItemDialog store={store} prefill={newItem} onClose={() => setNewItem(null)}
         onCreated={(it) => { setNewItem(null); if (it) setItemId(it.id); }}
         onScheduled={(it) => { setNewItem(null); onScheduled?.(it, !!newItem.backlog?.onGantt); }} />}

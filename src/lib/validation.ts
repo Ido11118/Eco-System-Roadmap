@@ -67,6 +67,14 @@ export const bulkItemsSchema = z.object({
     .refine((p) => p.status || p.priority, "לא נבחר שינוי"),
 });
 
+export const batchItemsSchema = z.object({
+  action: z.enum(["update", "delete", "restore"]),
+  entries: z.array(z.object({
+    id, version: z.number().int(),
+    patch: z.object({ status: status.optional(), priority: priority.optional(), startWeek: sunday.optional(), endWeek: sunday.optional() }).strict().optional(),
+  }).strict()).min(1).max(500).refine((es) => new Set(es.map((e) => e.id)).size === es.length, "תכולה מופיעה יותר מפעם אחת"),
+}).strict().refine((v) => v.action !== "update" || v.entries.every((e) => e.patch && Object.keys(e.patch).length), "לא נבחר שינוי");
+
 export const createRowSchema = z.object({
   teamId: id, anchorRowId: id.optional(), position: z.enum(["above", "below"]).default("below"),
 });
