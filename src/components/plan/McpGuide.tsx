@@ -82,12 +82,9 @@ export function McpGuide({ onOpenSettings }: { onOpenSettings?: () => void }) {
 
         <ol className="mt-3 space-y-2.5" data-testid={`mcp-steps-${tool}`}>
           {tool === "claude" && <>
-            <li className="flex items-start gap-1.5 rounded-md border border-red-200 bg-red-50 p-2 text-[12.5px] text-red-800" data-testid="mcp-claude-org-warning">
-              <ShieldCheck size={15} className="mt-0.5 shrink-0" />
-              <span><b>שימו לב: זה לא עובד עם ה-Claude הארגוני שלנו.</b> החיבור אפשרי רק מחשבון Claude אישי (פרטי).</span>
-            </li>
             <S n={1}>נכנסים ל-<a href="https://claude.ai/settings/connectors" target="_blank" rel="noreferrer" className="text-brand-600 underline">claude.ai</a> בחשבון <b>האישי</b> (או לאפליקציית Claude במחשב) ופותחים <Ui>Settings</Ui><Arrow /><Ui>Connectors</Ui>.</S>
             <S n={2}>לוחצים <Ui>Add custom connector</Ui>.</S>
+            <Note>עם המשתמש של Claude הארגוני — החיבור כבר יופיע ברשימה, ועוברים לשלב 4.</Note>
             <S n={3}>בשדה <Ui>Name</Ui> כותבים <b>תוכנית עבודה</b>, ובשדה <Ui>URL</Ui> מדביקים את {UrlBox}. לוחצים <Ui>Add</Ui>.</S>
             <S n={4}>ליד ״תוכנית עבודה״ לוחצים <Ui>Connect</Ui>. נפתח חלון של המערכת.</S>
             <S n={5}>בחלון מתחברים (מייל וסיסמה או Google), בוחרים <b>קריאה בלבד</b> או <b>קריאה ועריכה</b>, ולוחצים <b>אישור וחיבור</b>.</S>
