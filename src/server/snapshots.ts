@@ -1,4 +1,5 @@
 import "server-only";
+import { displayName } from "@/server/userName";
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { snapshots, snapshotRevisions, users } from "@/db/schema";
@@ -30,7 +31,7 @@ export async function getManageable(me: Me, id: number): Promise<SnapRow> {
 export async function listSnapshots(me: Me): Promise<SnapshotMeta[]> {
   const rows = await db.select({
     s: snapshots,
-    createdBy: users.fullName,
+    createdBy: displayName(snapshots.createdById),
     revNo: snapshotRevisions.revisionNo,
     revCount: sql<number>`(select count(*)::int from snapshot_revisions r where r.snapshot_id = ${snapshots.id})`,
   }).from(snapshots)
@@ -78,7 +79,7 @@ export async function listRevisions(me: Me, snapshotId: number) {
   await getVisible(me, snapshotId);
   const rows = await db.select({
     id: snapshotRevisions.id, revisionNo: snapshotRevisions.revisionNo, note: snapshotRevisions.note,
-    createdAt: snapshotRevisions.createdAt, createdBy: users.fullName,
+    createdAt: snapshotRevisions.createdAt, createdBy: displayName(snapshotRevisions.createdById),
     items: sql<number>`jsonb_array_length(${snapshotRevisions.data}->'items')`,
   }).from(snapshotRevisions).leftJoin(users, eq(users.id, snapshotRevisions.createdById))
     .where(eq(snapshotRevisions.snapshotId, snapshotId)).orderBy(desc(snapshotRevisions.revisionNo));

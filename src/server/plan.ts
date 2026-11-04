@@ -1,8 +1,9 @@
 import "server-only";
+import { displayName } from "@/server/userName";
 import { and, asc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { db, type Tx } from "@/db";
 import {
-  auditLogs, domains, milestones, sprints, teams, users, workItems, workRows,
+  auditLogs, deletedUsers, domains, milestones, sprints, teams, users, workItems, workRows,
 } from "@/db/schema";
 import type { Dependency, ItemDTO, Me, MilestoneDTO, PlanData, RowDTO, SprintDTO } from "@/lib/types";
 import { ApiError } from "./errors";
@@ -42,7 +43,7 @@ export function sprintToDTO(s: typeof sprints.$inferSelect): SprintDTO {
 }
 
 export async function loadPlan(q: Tx | typeof db = db): Promise<PlanData> {
-  const [d, t, r, i, m, s, u] = await Promise.all([
+  const [d, t, r, i, m, s, u, du] = await Promise.all([
     q.select().from(domains).orderBy(asc(domains.sortOrder)),
     q.select().from(teams).where(isNull(teams.archivedAt)).orderBy(asc(teams.sortOrder)), // צוותים שהוסרו — לא מוצגים
     q.select().from(workRows).where(isNull(workRows.deletedAt)).orderBy(asc(workRows.sortOrder)),
@@ -51,6 +52,8 @@ export async function loadPlan(q: Tx | typeof db = db): Promise<PlanData> {
     q.select().from(sprints).where(isNull(sprints.deletedAt)).orderBy(asc(sprints.startDate)),
     // רק משתמשים שאושרו אי פעם (כולל מושעים — כדי שיוצגו כיוצרים של תכולות); ממתינים ונדחים אינם נחשפים
     q.select({ id: users.id, fullName: users.fullName }).from(users).where(isNotNull(users.approvedAt)),
+    // משתמשים שנמחקו — כדי שיוצגו כיוצרים / מעדכנים של תכולות
+    q.select({ id: deletedUsers.id, fullName: deletedUsers.fullName }).from(deletedUsers),
   ]);
   return {
     // "תחום שהוא גם הצוות": מחושב מהצוותים הפעילים (ולא מהערך השמור) — כך הוספת צוות לתחום כזה מפצלת אותו מיד
@@ -63,7 +66,7 @@ export async function loadPlan(q: Tx | typeof db = db): Promise<PlanData> {
     items: i.map(itemToDTO),
     milestones: m.map(msToDTO),
     sprints: s.map(sprintToDTO),
-    users: u,
+    users: [...u, ...du.map((x) => ({ id: x.id, fullName: `${x.fullName} (נמחק)` }))],
   };
 }
 
@@ -377,7 +380,7 @@ export async function restoreItem(me: Me, id: number) {
 /** תכולות שנמחקו (ב-180 הימים האחרונים) — לשחזור עם אותו ID. רק בתחומים שהמשתמש מורשה לערוך. */
 export async function listDeletedItems(me: Me) {
   const since = new Date(Date.now() - DELETED_RETENTION_DAYS * 86400000);
-  const rows = await db.select({ i: workItems, kind: workRows.kind, rowTeam: workRows.teamId, deletedBy: users.fullName })
+  const rows = await db.select({ i: workItems, kind: workRows.kind, rowTeam: workRows.teamId, deletedBy: displayName(workItems.deletedById) })
     .from(workItems).innerJoin(workRows, eq(workRows.id, workItems.rowId)).leftJoin(users, eq(users.id, workItems.deletedById))
     .where(and(sql`${workItems.deletedAt} is not null`, sql`${workItems.deletedAt} > ${since}`))
     .orderBy(sql`${workItems.deletedAt} desc`).limit(300);
@@ -491,7 +494,7 @@ export async function deleteSprint(me: Me, id: number, restore = false) {
 export async function itemHistory(entityType: string, entityId: number) {
   const rows = await db.select({
     id: auditLogs.id, at: auditLogs.at, action: auditLogs.action, summary: auditLogs.summary, changes: auditLogs.changes,
-    userName: users.fullName,
+    userName: displayName(auditLogs.userId),
   }).from(auditLogs).leftJoin(users, eq(users.id, auditLogs.userId))
     .where(and(eq(auditLogs.entityType, entityType), eq(auditLogs.entityId, String(entityId))))
     .orderBy(sql`${auditLogs.at} desc`).limit(200);

@@ -220,7 +220,7 @@ export const snapshots = pgTable("snapshots", {
   // תאריך המצב שה-Snapshot מייצג (ניתן לעריכה). קובע בהשוואה מה "תכנון" (מוקדם) ומה "ביצוע" (מאוחר)
   asOfDate: date("as_of_date", { mode: "string" }).notNull().default(sql`CURRENT_DATE`),
   createdAt: ts("created_at").notNull().defaultNow(),
-  createdById: integer("created_by_id").notNull().references(() => users.id),
+  createdById: integer("created_by_id").notNull(), // ללא מפתח זר: אחרי מחיקת משתמש השם נשמר ב-deleted_users
   // null = תמונת מצב משותפת (מנהל המערכת); מזהה משתמש = תמונת מצב אישית, גלויה רק לבעליה
   ownerId: integer("owner_id").references(() => users.id, { onDelete: "cascade" }),
   currentRevisionId: integer("current_revision_id"),
@@ -235,7 +235,7 @@ export const snapshotRevisions = pgTable("snapshot_revisions", {
   data: jsonb("data").notNull(),
   note: text("note").notNull().default(""),
   createdAt: ts("created_at").notNull().defaultNow(),
-  createdById: integer("created_by_id").notNull().references(() => users.id),
+  createdById: integer("created_by_id").notNull(),
 }, (t) => [uniqueIndex("snapshot_revisions_no_uq").on(t.snapshotId, t.revisionNo)]);
 
 export const savedViews = pgTable("saved_views", {
@@ -354,3 +354,12 @@ export const userActivity = pgTable("user_activity", {
   primaryKey({ columns: [t.userId, t.day, t.source] }),
   index("user_activity_day_idx").on(t.day),
 ]);
+
+// משתמשים שנמחקו לצמיתות ע"י מנהל המערכת — רק המזהה והשם, כדי שהיסטוריית השינויים ותמונות המצב ימשיכו להציג מי ביצע.
+// (המייל, הסיסמה, ההרשאות והחיבורים נמחקים; אפשר להירשם מחדש עם אותו מייל)
+export const deletedUsers = pgTable("deleted_users", {
+  id: integer("id").primaryKey(),
+  fullName: text("full_name").notNull(),
+  deletedAt: ts("deleted_at").notNull().defaultNow(),
+  deletedById: integer("deleted_by_id"),
+});

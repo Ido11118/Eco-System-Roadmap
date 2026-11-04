@@ -144,6 +144,7 @@ export const adminUserActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reactivate") }),
   z.object({ action: z.literal("setPermissions"), domainIds: z.array(id), canEditCross: z.boolean() }),
   z.object({ action: z.literal("resetLink") }),
+  z.object({ action: z.literal("delete"), confirmName: z.string().max(200) }),
 ]);
 
 // --- Snapshot data (מבנה זהה ל-PlanData) ---

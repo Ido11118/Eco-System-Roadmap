@@ -2,7 +2,7 @@ import "server-only";
 import bcrypt from "bcryptjs";
 import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { approvalRequests, passwordResetTokens, userDomainPermissions, users, domains, sessions } from "@/db/schema";
+import { approvalRequests, deletedUsers, passwordResetTokens, userDomainPermissions, users, domains, sessions } from "@/db/schema";
 import type { Me } from "@/lib/types";
 import { ApiError } from "./errors";
 import { appUrlFromEnv } from "@/lib/appUrl";
@@ -97,7 +97,7 @@ export async function adminUserAction(admin: Me, userId: number, a:
   | { action: "approve"; domainIds: number[]; canEditCross: boolean }
   | { action: "reject" } | { action: "suspend" } | { action: "reactivate" }
   | { action: "setPermissions"; domainIds: number[]; canEditCross: boolean }
-  | { action: "resetLink" }) {
+  | { action: "resetLink" } | { action: "delete"; confirmName: string }) {
   const [u] = await db.select().from(users).where(eq(users.id, userId));
   if (!u) throw new ApiError(404, "המשתמש לא נמצא");
   if (u.role === "SUPER") throw new ApiError(400, "לא ניתן לשנות את חשבון מנהל המערכת");
@@ -109,6 +109,7 @@ export async function adminUserAction(admin: Me, userId: number, a:
   const allowed: Record<string, string[]> = {
     approve: ["PENDING", "REJECTED"], reject: ["PENDING"], suspend: ["APPROVED"], reactivate: ["SUSPENDED"],
     setPermissions: ["APPROVED", "SUSPENDED"], resetLink: ["PENDING", "APPROVED", "SUSPENDED"],
+    delete: ["PENDING", "APPROVED", "REJECTED", "SUSPENDED"],
   };
   if (!allowed[a.action].includes(u.status)) throw new ApiError(409, "הפעולה אינה מתאימה לסטטוס הנוכחי של המשתמש. רענן את המסך.");
   const killSessions = (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => tx.delete(sessions).where(eq(sessions.userId, userId));
@@ -151,6 +152,16 @@ export async function adminUserAction(admin: Me, userId: number, a:
         const token = await createResetToken(userId, tx);
         await audit(tx, admin.id, "user", userId, "resetLink", null, `הופק קישור איפוס סיסמה עבור ${u.fullName}`);
         return { link: `${appUrl()}/reset?token=${token}` };
+      }
+      case "delete": {
+        // מחיקה לצמיתות: החשבון, ההרשאות, החיבורים, התצוגות ותמונות המצב האישיות נמחקים (cascade).
+        // התכולות שיצר, תמונות המצב המשותפות וההיסטוריה נשארים — ושמו ממשיך להופיע בהם (deleted_users).
+        if (a.confirmName.trim() !== u.fullName.trim()) throw new ApiError(400, "השם שהוקלד לאישור אינו תואם לשם המשתמש");
+        await revokeUserGrants(tx, userId);
+        await tx.insert(deletedUsers).values({ id: userId, fullName: u.fullName, deletedById: admin.id }).onConflictDoNothing();
+        await tx.delete(users).where(eq(users.id, userId));
+        await audit(tx, admin.id, "user", userId, "delete", { before }, `נמחק לצמיתות משתמש ${u.fullName}`);
+        return { ok: true };
       }
     }
   });

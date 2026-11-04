@@ -1855,6 +1855,49 @@ async function main() {
     await pa.click("[data-testid=advanced-reset]"); await pa.click("[data-testid=text-size] [data-value=md]"); await pa.keyboard.press("Escape");
   });
 
+  await scenario(63, "מחיקת משתמש לצמיתות: רק עם הקלדת השם; החשבון נמחק, התכולות וההיסטוריה נשארים עם השם ״(נמחק)״; אפשר להירשם מחדש", async () => {
+    const uD = { email: `del-${RUN}@test.local`, name: `משתמש למחיקה ${RUN}` };
+    const D = await ctx();
+    assert((await json(D, "POST", "/api/auth/register", { fullName: uD.name, email: uD.email, password: PW, domainIds: [AGAM], requestCross: false })).status === 200, "register D");
+    const dId = await userId(uD.email);
+    await json(admin, "POST", `/api/admin/users/${dId}`, { action: "approve", domainIds: [AGAM], canEditCross: false });
+    await login(D, uD.email, PW);
+    const r = await newRow(D, T_AZ1);
+    const it = (await json<ItemDTO>(D, "POST", "/api/items", { rowId: r.id, name: `של-D-${RUN}`, startWeek: addWeeks(cw, 2), endWeek: addWeeks(cw, 3) })).body;
+    assert(it?.id, "D could not create an item");
+    assert((await json(D, "POST", "/api/snapshots", { name: `אישי-D-${RUN}`, scope: "personal" })).status === 200, "D personal snapshot");
+    // הגנות: שם לא תואם נדחה; את מנהל המערכת אי אפשר למחוק; משתמש רגיל לא יכול למחוק
+    assert((await json(admin, "POST", `/api/admin/users/${dId}`, { action: "delete", confirmName: "שם אחר" })).status === 400, "delete with wrong name accepted");
+    const adminId = await userId(ADMIN.email);
+    assert((await json(admin, "POST", `/api/admin/users/${adminId}`, { action: "delete", confirmName: "x" })).status === 400, "super user deletable");
+    assert((await json(A, "POST", `/api/admin/users/${dId}`, { action: "delete", confirmName: uD.name })).status === 403, "regular user can delete users");
+    // מחיקה מהממשק: הכפתור נעול עד שמקלידים את השם המדויק
+    await pAdmin.goto(`${BASE}/admin`);
+    const card = pAdmin.locator(`[data-testid="user-card-${uD.email}"]`);
+    await card.locator("[data-testid=delete-user]").click();
+    const confirmBtn = pAdmin.locator("[data-testid=delete-user-confirm]");
+    assert(await confirmBtn.isDisabled(), "delete enabled before typing the name");
+    await pAdmin.fill("[data-testid=delete-user-name]", "משהו אחר");
+    assert(await confirmBtn.isDisabled(), "delete enabled with a wrong name");
+    await pAdmin.fill("[data-testid=delete-user-name]", uD.name);
+    await confirmBtn.click();
+    await card.waitFor({ state: "detached" });
+    // החשבון נעלם, הסשן מת
+    assert(!(await json<{ email: string }[]>(admin, "GET", "/api/admin/users")).body.some((u) => u.email === uD.email), "deleted user still listed");
+    assert((await json(D, "GET", "/api/me")).status === 401, "deleted user's session still alive");
+    // התכולה וההיסטוריה נשארים, עם השם ״(נמחק)״
+    const plan = (await json<PlanData>(admin, "GET", "/api/plan")).body;
+    assert(plan.items.some((i) => i.id === it.id), "item of deleted user disappeared");
+    assert(plan.users.some((u) => u.id === dId && u.fullName === `${uD.name} (נמחק)`), "deleted user's name missing from plan users");
+    const hist = (await json<{ userName: string | null }[]>(admin, "GET", `/api/history?type=item&id=${it.id}`)).body;
+    assert(hist.length > 0 && hist.every((h) => h.userName === `${uD.name} (נמחק)`), `history names: ${JSON.stringify(hist.map((h) => h.userName))}`);
+    // הרשמה מחדש עם אותו מייל — משתמש חדש שממתין לאישור
+    const D2 = await ctx();
+    const re = await json<{ status: string }>(D2, "POST", "/api/auth/register", { fullName: uD.name, email: uD.email, password: PW, domainIds: [AGAM], requestCross: false });
+    assert(re.status === 200 && re.body.status === "PENDING", `re-register: ${re.status} ${JSON.stringify(re.body)}`);
+    await D.dispose(); await D2.dispose();
+  });
+
   await scenario(61, "עין להצגת הסיסמה במסך ההתחברות ובמסך איפוס הסיסמה; ההתחברות והאיפוס עובדים", async () => {
     const ctx2 = await browser.newContext({ locale: "he-IL" });
     const p = await ctx2.newPage();

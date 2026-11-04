@@ -120,6 +120,13 @@
       "when": 1793648246375,
       "tag": "0016_user_activity",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793794995743,
+      "tag": "0017_delete_users",
+      "breakpoints": true
     }
   ]
 }

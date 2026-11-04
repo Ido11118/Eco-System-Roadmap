@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, X, PauseCircle, PlayCircle, KeyRound, Copy, Eye, Save, Search } from "lucide-react";
+import { Check, X, PauseCircle, PlayCircle, KeyRound, Copy, Eye, Save, Search, Trash2 } from "lucide-react";
 import type { Me } from "@/lib/types";
 import { api } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
@@ -203,6 +203,8 @@ function UserCard({ u, domains }: { u: AdminUser; domains: { id: number; name: s
   const [sel, setSel] = useState<number[]>(initialDomains);
   const [cross, setCross] = useState(u.status === "PENDING" ? !!u.request?.cross : u.canEditCross);
   const [link, setLink] = useState<string | null>(null);
+  const [delOpen, setDelOpen] = useState(false);
+  const [delName, setDelName] = useState("");
   // סנכרון מחדש מהשרת (למשל אחרי שינוי שבוצע בלשונית אחרת) — כדי לא לדרוס בשקט מצב עדכני
   const serverKey = `${u.status}|${u.canEditCross}|${[...u.domainIds].sort().join(",")}`;
   useEffect(() => {
@@ -275,8 +277,27 @@ function UserCard({ u, domains }: { u: AdminUser; domains: { id: number; name: s
             <button className="btn-secondary btn-sm" onClick={() => act({ action: u.status === "REJECTED" ? "approve" : "reactivate", domainIds: sel, canEditCross: cross }, "הגישה הופעלה")}><PlayCircle size={13} />{u.status === "REJECTED" ? "אישור" : "הפעלה מחדש"}</button>
           )}
           <button className="btn-ghost btn-sm mr-auto" onClick={() => act({ action: "resetLink" }, "")}><KeyRound size={13} />קישור לאיפוס סיסמה</button>
+          <button className="btn-ghost btn-sm text-red-600 hover:bg-red-50" onClick={() => { setDelName(""); setDelOpen(true); }} data-testid="delete-user"><Trash2 size={13} />מחיקת משתמש</button>
         </div>
       )}
+      <Dialog open={delOpen} onClose={() => setDelOpen(false)} title="מחיקת משתמש לצמיתות"
+        footer={<>
+          <button className="btn-secondary" onClick={() => setDelOpen(false)}>ביטול</button>
+          <button className="btn-danger" disabled={delName.trim() !== u.fullName.trim()} data-testid="delete-user-confirm"
+            onClick={async () => { await act({ action: "delete", confirmName: delName }, "המשתמש נמחק"); setDelOpen(false); }}><Trash2 size={13} />מחיקה לצמיתות</button>
+        </>}>
+        <div className="space-y-2 text-[13px] text-ink-700">
+          <p>המחיקה של <b>{u.fullName}</b> סופית ואי אפשר לבטל אותה.</p>
+          <ul className="list-disc space-y-0.5 pr-5 text-[12.5px] text-ink-600">
+            <li>נמחקים: החשבון, ההרשאות, חיבורי ה-AI, התצוגות השמורות ותמונות המצב האישיות שלו.</li>
+            <li>נשארים: התכולות שיצר, תמונות המצב המשותפות והיסטוריית השינויים — שמו ימשיך להופיע בהן עם הסימון ״(נמחק)״.</li>
+            <li>אפשר יהיה להירשם מחדש עם אותו מייל (כמשתמש חדש שממתין לאישור).</li>
+          </ul>
+          <p className="text-[12.5px] text-ink-500">אם רק צריך לחסום גישה זמנית — עדיף <b>השעיה</b>.</p>
+          <label className="block pt-1 text-[12.5px] font-medium" htmlFor={`del-${u.id}`}>לאישור, הקלד את שם המשתמש: <b>{u.fullName}</b></label>
+          <input id={`del-${u.id}`} className="input" value={delName} onChange={(e) => setDelName(e.target.value)} autoComplete="off" data-testid="delete-user-name" />
+        </div>
+      </Dialog>
       <Dialog open={!!link} onClose={() => setLink(null)} title="קישור לאיפוס סיסמה" footer={<button className="btn-secondary" onClick={() => setLink(null)}>סגירה</button>}>
         <p className="mb-2 text-[12.5px] text-ink-500">העבר את הקישור למשתמש בערוץ מאובטח. הקישור בתוקף לשעה ולשימוש חד-פעמי.</p>
         <div className="flex gap-1">
