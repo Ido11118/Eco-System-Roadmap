@@ -2,9 +2,7 @@
 // תצוגת תכולות (Table View) — אותו מקור נתונים ואותן פעולות עדכון כמו הגאנט.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Layers, X, ChevronDown, ChevronsDownUp, ChevronsUpDown, Trash2 } from "lucide-react";
-import { useConfirm } from "@/components/ui/dialog";
-import { DELETED_RETENTION_DAYS } from "@/lib/constants";
+import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Layers, X, ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import type { ItemDTO, Me, ViewConfig } from "@/lib/types";
 import { useCatalog } from "@/components/CatalogProvider";
 import { fmtDate, weekEndOf, weekNumber, weekYear } from "@/lib/weeks";
@@ -19,6 +17,7 @@ import { useIsMobile } from "@/components/ui/useMobile";
 import { WeekPicker } from "@/components/plan/WeekPicker";
 import { currentPrefs, savePrefs, uiZoom } from "@/components/plan/prefs";
 import { DepsCell } from "@/components/plan/Dependencies";
+import { SelectionBar, ItemActionsMenu } from "@/components/plan/ItemSelection";
 import { depsOf, openDeps } from "@/lib/deps";
 
 type ColKey = "domain" | "team" | "name" | "priority" | "status" | "notes" | "deps" | "start" | "end" | "createdBy" | "updatedAt";
@@ -48,7 +47,7 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
   const mobile = useIsMobile();
   const [sort, setSort] = useState<{ key: ColKey; dir: 1 | -1 } | null>(null);
   const [grouped, setGrouped] = useState(true);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const selected = ui.selectedItems, setSelected = ui.setSelectedItems;
   const [widths, setWidths] = useState<Record<string, number>>(() => ({ ...Object.fromEntries(COLS.map((c) => [c.key, c.w])), ...(currentPrefs(me.preferences).tableColumnWidths ?? {}) }));
   const saveWidths = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -117,19 +116,20 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
     window.addEventListener("wp:locate", h);
     return () => window.removeEventListener("wp:locate", h);
   }, []);
-  const selItems = sorted.filter((r) => selected.has(r.item.id) && r.editable).map((r) => r.item);
+  const selItems = data.items.filter((i) => selected.has(i.id));
   // בחירה מרובה: Ctrl/⌘+לחיצה מוסיף/מסיר שורה, Shift+לחיצה בוחר טווח. Escape מנקה.
   const anchor = useRef<number | null>(null);
   const onRowClick = (e: React.MouseEvent, r: Row) => {
-    if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return;
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey)) { setSelected(new Set()); anchor.current = r.item.id; return; }
     e.preventDefault(); e.stopPropagation();
     window.getSelection()?.removeAllRanges();
     if (e.shiftKey && anchor.current !== null) {
-      const ids = sorted.map((x) => x.item.id);
+      const visibleRows = sorted.filter((x) => !groupedOn || !collapsed.has(x.teamId));
+      const ids = visibleRows.map((x) => x.item.id);
       const a = ids.indexOf(anchor.current), b = ids.indexOf(r.item.id);
       if (a >= 0 && b >= 0) {
         const [lo, hi] = a < b ? [a, b] : [b, a];
-        setSelected(new Set(sorted.slice(lo, hi + 1).filter((x) => x.editable).map((x) => x.item.id)));
+        setSelected(new Set(visibleRows.slice(lo, hi + 1).filter((x) => x.editable).map((x) => x.item.id)));
         return;
       }
     }
@@ -137,17 +137,12 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
     if (!r.editable) return;
     setSelected((s) => { const n = new Set(s); if (n.has(r.item.id)) n.delete(r.item.id); else n.add(r.item.id); return n; });
   };
-  useEffect(() => {
-    if (!selected.size) return;
-    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector("[role=dialog]")) setSelected(new Set()); };
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
-  }, [selected.size]);
   // קליק ימני על שורה: אם השורה בתוך הבחירה — הפעולה על כל הנבחרות; אחרת — על השורה בלבד
   const [rowMenu, setRowMenu] = useState<{ x: number; y: number; items: ItemDTO[]; one: Row } | null>(null);
   const onRowMenu = (e: React.MouseEvent, r: Row) => {
     if ((e.target as HTMLElement).closest("input, textarea, select")) return;
     e.preventDefault();
+    if (!selected.has(r.item.id)) setSelected(new Set());
     const items = selected.has(r.item.id) && selItems.length > 1 ? selItems : [r.item];
     setRowMenu({ x: e.clientX, y: e.clientY, items, one: r });
   };
@@ -182,22 +177,10 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
         {!selItems.length && <span className="text-[11.5px] text-ink-400">· קליק ימני על שורה לפעולות · <span className="kbd">Ctrl</span>+לחיצה לבחירה מרובה</span>}
         <button className={clsx("btn-ghost btn-sm", grouped && "bg-ink-100")} onClick={() => setGrouped((g) => !g)}><Layers size={13} />קיבוץ לפי תחום וצוות</button>
         {sort && <button className="btn-ghost btn-sm" onClick={() => setSort(null)}><X size={12} />ביטול מיון</button>}
-        {selItems.length > 0 && (
-          <div className="mr-4 flex items-center gap-2 rounded-md bg-brand-50 px-2 py-1 text-brand-700" data-testid="bulk-bar">
-            <span className="font-medium">{selItems.length} נבחרו</span>
-            <select className="input h-7 w-auto py-0 text-[12px]" value="" onChange={async (e) => { if (e.target.value) { await store.bulkUpdate(selItems, { status: e.target.value }); } }} data-testid="bulk-status">
-              <option value="">שינוי סטטוס…</option>
-              {cat.statuses.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-            </select>
-            <select className="input h-7 w-auto py-0 text-[12px]" value="" onChange={async (e) => { if (e.target.value) { await store.bulkUpdate(selItems, { priority: e.target.value }); } }}>
-              <option value="">שינוי תיעדוף…</option>
-              {cat.priorities.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-            </select>
-            <button className="btn-ghost btn-sm" onClick={() => setSelected(new Set())}>ניקוי בחירה</button>
-          </div>
-        )}
+
       </div>
-      <div className="min-h-0 flex-1 overflow-auto bg-white">
+      <SelectionBar store={store} />
+      <div className="min-h-0 flex-1 overflow-auto bg-white" onMouseDown={(e) => { if (!(e.target as HTMLElement).closest("[data-item-row], button, input, select, textarea")) setSelected(new Set()); }}>
         <table className="border-separate border-spacing-0 text-[12.5px]" style={{ width: totalW, tableLayout: "fixed" }}>
           <colgroup>
             {COLS.map((c) => <col key={c.key} style={{ width: widths[c.key] }} />)}
@@ -243,7 +226,7 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
               if (isCollapsed) return [headerRow];
               return [
                 headerRow,
-                <tr key={i.id} className={clsx("group hover:bg-brand-50/40", selected.has(i.id) && "bg-brand-50/60 [&>td]:!bg-brand-50")} data-item-row={i.id}
+                <tr key={i.id} className={clsx("group hover:bg-brand-50/40", selected.has(i.id) && "bg-brand-50/60 [&>td]:!bg-brand-50")} data-item-row={i.id} data-selected={selected.has(i.id) || undefined} aria-selected={selected.has(i.id)}
                   onClickCapture={(e) => onRowClick(e, r)} onContextMenu={(e) => onRowMenu(e, r)} style={{ height: 34 }}>
                   <td className={clsx(cell, "sticky z-10 truncate bg-white font-medium text-ink-700 group-hover:bg-[#f5f8ff]")} style={{ right: stickyRight("domain") }}>{r.domain}</td>
                   <td className={clsx(cell, "sticky z-10 truncate bg-white text-ink-700 group-hover:bg-[#f5f8ff]")} style={{ right: stickyRight("team") }}>{r.team}</td>
@@ -283,7 +266,7 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
         </table>
       </div>
       <Floating open={!!rowMenu} point={rowMenu ?? undefined} onClose={() => setRowMenu(null)}>
-        {rowMenu && <RowMenu menu={rowMenu} store={store} onOpen={(id) => ui.openItem(id)} onDone={() => { setRowMenu(null); }} onDeleted={() => setSelected(new Set())} />}
+        {rowMenu && <ItemActionsMenu menu={rowMenu} store={store} onOpen={(id) => ui.openItem(id)} onDone={() => { setRowMenu(null); }} onDeleted={() => setSelected(new Set())} />}
       </Floating>
       <Floating open={!!groupMenu} point={groupMenu ?? undefined} onClose={() => setGroupMenu(null)}>
         {groupMenu && (
@@ -299,66 +282,6 @@ export const TableView = memo(function TableView({ store, view, setView, me }: {
     </div>
   );
 });
-
-/** תפריט קליק ימני על שורה (או על כמה שורות נבחרות): סטטוס, תיעדוף, פרטים, מחיקה */
-function RowMenu({ menu, store, onOpen, onDone, onDeleted }: {
-  menu: { items: ItemDTO[]; one: Row }; store: PlanStore; onOpen: (id: number) => void; onDone: () => void; onDeleted: () => void;
-}) {
-  const cat = useCatalog();
-  const confirm = useConfirm();
-  const { items, one } = menu;
-  const multi = items.length > 1;
-  const editable = multi || one.editable;
-  const apply = (patch: { status?: string; priority?: string }) => {
-    onDone();
-    if (multi) void store.bulkUpdate(items, patch);
-    else void store.updateItem(items[0], patch);
-  };
-  return (
-    <div className="w-[250px] p-1" data-testid="row-menu">
-      <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-ink-500">{multi ? `${items.length} תכולות נבחרו` : one.item.name}</div>
-      {!multi && <MenuItem icon={<ExternalLink size={14} />} onClick={() => { onDone(); onOpen(one.item.id); }}>פתח פרטי תכולה</MenuItem>}
-      {editable ? (
-        <>
-          <div className="my-1 border-t border-ink-100" />
-          <div className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold text-ink-400">שינוי סטטוס</div>
-          <div className="grid grid-cols-2 gap-0.5 px-1">
-            {cat.statuses.map((st) => (
-              <button key={st.key} onClick={() => apply({ status: st.key })} data-status-option={st.key}
-                className={clsx("flex items-center gap-1.5 rounded px-1.5 py-1 text-start text-[12px] hover:bg-ink-100", !multi && one.item.status === st.key && "bg-ink-100 font-semibold")}>
-                <span className="h-2.5 w-2.5 shrink-0 rounded-sm border" style={{ background: st.bg, borderColor: st.border }} />
-                <span className="truncate">{st.label}</span>
-              </button>
-            ))}
-          </div>
-          <div className="my-1 border-t border-ink-100" />
-          <div className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold text-ink-400">שינוי תיעדוף</div>
-          <div className="flex flex-wrap gap-0.5 px-1">
-            {cat.priorities.map((p) => (
-              <button key={p.key} onClick={() => apply({ priority: p.key })} data-priority-option={p.key}
-                className={clsx("rounded px-2 py-1 text-[12px] font-medium hover:bg-ink-100", !multi && one.item.priority === p.key && "bg-ink-100")}
-                style={{ color: p.key === cat.defaultPriority ? "#64748b" : p.color }}>{p.label}</button>
-            ))}
-          </div>
-          <div className="my-1 border-t border-ink-100" />
-          <MenuItem danger icon={<Trash2 size={14} />} onClick={async () => {
-            onDone();
-            const ok = await confirm({
-              title: multi ? `מחיקת ${items.length} תכולות` : "מחיקת תכולה", danger: true, confirm: "מחיקה",
-              text: <>
-                {multi ? `האם אתה בטוח שברצונך למחוק ${items.length} תכולות?` : <>האם אתה בטוח שברצונך למחוק את &quot;{one.item.name}&quot;?</>}
-                <span className="mt-1.5 block text-[12px] text-ink-500">אם תרצה לשחזר, התכולה תהיה זמינה ב-{DELETED_RETENTION_DAYS} הימים הקרובים תחת &quot;תכולות שנמחקו&quot; (עם אותו ID).</span>
-              </>,
-            });
-            if (!ok) return;
-            for (const it of items) await store.deleteItem(it);
-            onDeleted();
-          }}>{multi ? `מחיקת ${items.length} תכולות` : "מחיקת תכולה"}</MenuItem>
-        </>
-      ) : <div className="px-2.5 py-1.5 text-[12px] text-ink-400">אין לך הרשאת עריכה לתחום זה — צפייה בלבד</div>}
-    </div>
-  );
-}
 
 function NameCell({ item, editable, store, onOpen }: { item: ItemDTO; editable: boolean; store: PlanStore; onOpen: () => void }) {
   const [edit, setEdit] = useState(false);

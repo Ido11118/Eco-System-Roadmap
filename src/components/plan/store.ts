@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { replaceEqualDeep, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiErr } from "@/lib/api";
 import type { ItemDTO, Me, MilestoneDTO, PlanData, RowDTO, SprintDTO } from "@/lib/types";
+import { batchOverlap, shiftedEntries, type BatchAction, type BatchEntry } from "@/lib/itemBatch";
 import { depsOf } from "@/lib/deps";
 import { useCatalog } from "@/components/CatalogProvider";
 import { useToast } from "@/components/ui/toast";
@@ -29,6 +30,8 @@ export interface PlanStore {
   /** noUndo: שינוי שהוא עצמו ביטול (לא נכנס לרשימת הביטולים) */
   updateItem: (item: ItemDTO, patch: ItemPatch, opts?: { undoLabel?: string; silent?: boolean; noUndo?: boolean }) => Promise<boolean>;
   bulkUpdate: (items: ItemDTO[], patch: { status?: string; priority?: string }) => Promise<boolean>;
+  shiftItems: (items: ItemDTO[], weeks: number) => Promise<boolean>;
+  deleteItems: (items: ItemDTO[]) => Promise<boolean>;
   deleteItem: (item: ItemDTO) => Promise<void>;
   createRow: (teamId: number, anchorRowId?: number, position?: "above" | "below") => Promise<number | null>;
   deleteRow: (row: RowDTO, opts?: { silent?: boolean }) => Promise<void>;
@@ -204,21 +207,56 @@ export function useLivePlan(me: Me): PlanStore {
     } catch (e) { fail(e); return null; }
   }), [fail, pushUndo, setData, toast, track]);
 
-  const bulkUpdate: PlanStore["bulkUpdate"] = useCallback((items, patch) => track(async () => {
-    for (const it of items) replaceItem({ ...it, ...patch });
+  const mutateBatch = useCallback((action: BatchAction, entries: BatchEntry[]) => track(async () => {
+    const updated = await api<ItemDTO[]>("POST", "/api/items/batch", { action, entries });
+    const byId = new Map(updated.map((i) => [i.id, i]));
+    setData((d) => {
+      const existing = new Set(d.items.map((i) => i.id));
+      return { ...d, items: action === "delete" ? d.items.filter((i) => !byId.has(i.id))
+        : [...d.items.map((i) => byId.get(i.id) ?? i), ...updated.filter((i) => !existing.has(i.id))] };
+    });
+    return updated;
+  }), [setData, track]);
+
+  const changeItems = useCallback(async (items: ItemDTO[], entries: BatchEntry[], label: string) => {
+    if (!items.length) return false;
     try {
-      const upd = await api<ItemDTO[]>("POST", "/api/items/bulk", { entries: items.map((i) => ({ id: i.id, version: i.version })), patch });
-      const byId = new Map(upd.map((u) => [u.id, u]));
-      setData((d) => ({ ...d, items: d.items.map((x) => byId.get(x.id) ?? x) }));
-      const before = items.map((it) => ({ id: it.id, patch: { ...(patch.status ? { status: it.status } : {}), ...(patch.priority ? { priority: it.priority } : {}) } }));
-      pushUndo({ label: `עודכנו ${upd.length} תכולות`, run: async () => {
-        let ok = true;
-        for (const b of before) { const cur = curItem(b.id); if (cur) ok = (await updateItemRef.current(cur, b.patch, { silent: true, noUndo: true })) && ok; }
-        return ok;
+      const updated = await mutateBatch("update", entries);
+      const before = entries.map((e) => {
+        const item = items.find((i) => i.id === e.id)!;
+        return { id: e.id, version: updated.find((i) => i.id === e.id)!.version, patch: Object.fromEntries(Object.keys(e.patch!).map((k) => [k, item[k as keyof ItemDTO]])) };
+      });
+      pushUndo({ label, run: async () => {
+        const reverse = before.map((b) => {
+          const current = curItem(b.id);
+          const expected = updated.find((i) => i.id === b.id)!;
+          if (!current || Object.keys(b.patch).some((k) => current[k as keyof ItemDTO] !== expected[k as keyof ItemDTO])) {
+            throw new Error("אחת התכולות השתנתה מאז הפעולה — הביטול כולו נעצר כדי לשמור על השינויים");
+          }
+          return { ...b, version: current.version };
+        });
+        await mutateBatch("update", reverse);
+        return true;
       } });
       return true;
     } catch (e) { fail(e); return false; }
-  }), [fail, replaceItem, setData, toast, track, pushUndo]);
+  }, [mutateBatch, pushUndo, fail]);
+
+  const bulkUpdate: PlanStore["bulkUpdate"] = useCallback((items, patch) => changeItems(items,
+    items.map((i) => ({ id: i.id, version: i.version, patch })), `עודכנו ${items.length} תכולות`), [changeItems]);
+  const shiftItems: PlanStore["shiftItems"] = useCallback((items, weeks) => changeItems(items,
+    shiftedEntries(items, weeks), `הוזזו ${items.length} תכולות`), [changeItems]);
+  const deleteItems: PlanStore["deleteItems"] = useCallback(async (items) => {
+    if (!items.length) return false;
+    try {
+      const deleted = await mutateBatch("delete", items.map((i) => ({ id: i.id, version: i.version })));
+      pushUndo({ label: `נמחקו ${items.length} תכולות`, run: async () => {
+        await mutateBatch("restore", deleted.map((i) => ({ id: i.id, version: i.version })));
+        return true;
+      } });
+      return true;
+    } catch (e) { fail(e); return false; }
+  }, [mutateBatch, pushUndo, fail]);
 
   const deleteItem: PlanStore["deleteItem"] = useCallback((item) => track(async () => {
     const cur = curItem(item.id) ?? item;
@@ -347,10 +385,10 @@ export function useLivePlan(me: Me): PlanStore {
   // אובייקט יציב — מונע רינדור מחדש של כל הגאנט/טבלה בכל רינדור של ההורה
   return useMemo<PlanStore>(() => ({
     kind: "live", data, loading: q.isLoading, error: errMsg, readOnly: false,
-    ...perms, createItem, updateItem, bulkUpdate, deleteItem, createRow, deleteRow,
+    ...perms, createItem, updateItem, bulkUpdate, shiftItems, deleteItems, deleteItem, createRow, deleteRow,
     createMilestone, updateMilestone, deleteMilestone, createSprint, updateSprint, deleteSprint,
     undo, refresh,
-  }), [data, q.isLoading, errMsg, perms, createItem, updateItem, bulkUpdate, deleteItem, createRow, deleteRow,
+  }), [data, q.isLoading, errMsg, perms, createItem, updateItem, bulkUpdate, shiftItems, deleteItems, deleteItem, createRow, deleteRow,
     createMilestone, updateMilestone, deleteMilestone, createSprint, updateSprint, deleteSprint, undo, refresh]);
 }
 
@@ -363,7 +401,7 @@ export function readOnlyStore(me: Me, data: PlanData | undefined, loading: boole
   return {
     kind: "snapshot", data, loading, error, readOnly: true,
     ...makePerms(me, data, true),
-    createItem: async () => null, updateItem: async () => false, bulkUpdate: async () => false,
+    createItem: async () => null, updateItem: no, bulkUpdate: no, shiftItems: no, deleteItems: no,
     deleteItem: noop, createRow: async () => null, deleteRow: noop, createMilestone: no, updateMilestone: no, deleteMilestone: no,
     createSprint: no, updateSprint: no, deleteSprint: no, undo: () => {}, refresh: () => {},
   };
@@ -431,6 +469,21 @@ export function useDraftPlan(me: Me, initial: PlanData | undefined) {
     bulkUpdate: async (items, patch) => {
       const ids = new Set(items.map((i) => i.id));
       commit((d) => ({ ...d, items: d.items.map((x) => (ids.has(x.id) ? { ...x, ...patch } : x)) }));
+      return true;
+    },
+    shiftItems: async (items, weeks) => {
+      const d = dataRef.current!;
+      const entries = shiftedEntries(items, weeks);
+      const moved = items.map((i, n) => ({ ...i, ...entries[n].patch }));
+      const clash = batchOverlap(d, moved);
+      if (clash) { toast.show("error", `הטווח חופף לתכולה "${clash.name}"`); return false; }
+      const byId = new Map(moved.map((i) => [i.id, i]));
+      commit((d) => ({ ...d, items: d.items.map((i) => byId.get(i.id) ?? i) }));
+      return true;
+    },
+    deleteItems: async (items) => {
+      const ids = new Set(items.map((i) => i.id));
+      commit((d) => ({ ...d, items: d.items.filter((i) => !ids.has(i.id)) }));
       return true;
     },
     deleteItem: async (item) => commit((d) => ({ ...d, items: d.items.filter((x) => x.id !== item.id) })),

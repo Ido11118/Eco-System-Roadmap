@@ -208,7 +208,7 @@ export function PlanApp({ me }: { me: Me }) {
   const cmpError = cmp?.plan.error ?? cmp?.actual.error ?? null;
 
   return (
-    <WorkspaceUIProvider store={workStore} me={me} placing={placing} onScheduled={onScheduled}>
+    <WorkspaceUIProvider key={snapId ? `snapshot-${snapId}-${snapRev ?? "current"}` : "live"} store={workStore} me={me} placing={placing} onScheduled={onScheduled}>
       <AppShell me={me} active={mode} sidebarAction={mode !== "compare" && !snapId ? <AiImportButton store={workStore} /> : undefined}>
         <TopBar me={me}>
           {mode !== "compare" && mode !== "backlog" && (

@@ -11,6 +11,7 @@ import { loadCatalog } from "./catalog";
 import { currentVia } from "./requestContext";
 import { DELETED_RETENTION_DAYS } from "@/lib/constants";
 import type { Catalog } from "@/lib/catalog";
+import { batchOverlap, type BatchAction, type BatchEntry } from "@/lib/itemBatch";
 
 // ---------------------------------------------------------------------------
 // טעינת התוכנית הנוכחית (מקור הנתונים היחיד לכל התצוגות)
@@ -318,6 +319,57 @@ export async function bulkUpdateItems(me: Me, entries: { id: number; version: nu
     for (const r of rowIds) await tx.execute(sql`SELECT id FROM work_rows WHERE id = ${r} FOR UPDATE`);
     const out: ItemDTO[] = [];
     for (const e of [...entries].sort((a, b) => a.id - b.id)) out.push(await updateItem(me, e.id, e.version, patch, tx, cat));
+    return out;
+  });
+}
+
+/** All checks, writes and audit records succeed or roll back together. */
+export async function batchItems(me: Me, action: BatchAction, entries: BatchEntry[]) {
+  const cat = await loadCatalog();
+  const ids = entries.map((e) => e.id);
+  return db.transaction(async (tx) => {
+    const initial = await tx.select().from(workItems).where(inArray(workItems.id, ids));
+    const rows = [];
+    for (const id of [...new Set(initial.map((i) => i.rowId))].sort((a, b) => a - b)) {
+      const row = await getRowForUpdate(tx, id);
+      await assertRow(me, row);
+      rows.push(row);
+    }
+    // Re-read after row locks: another batch may have committed while waiting.
+    const current = await tx.select().from(workItems).where(inArray(workItems.id, ids)).orderBy(asc(workItems.id)).for("update");
+    const now = new Date();
+    const next = entries.map((e) => {
+      const cur = current.find((i) => i.id === e.id);
+      if (!cur || (action === "restore" ? !cur.deletedAt : !!cur.deletedAt)) throw new ApiError(404, "אחת התכולות אינה זמינה. רענן ונסה שוב.");
+      if (initial.find((i) => i.id === e.id)?.rowId !== cur.rowId) throw new ApiError(409, "אחת התכולות הועברה לשורה אחרת. הפעולה כולה בוטלה — רענן ונסה שוב.", { conflict: "version" });
+      if (cur.version !== e.version) throw new ApiError(409, "אחת התכולות עודכנה בינתיים. הפעולה כולה בוטלה — רענן ונסה שוב.", { conflict: "version" });
+      const patch = action === "update" ? e.patch ?? {} : {};
+      assertInCatalog(cat, patch);
+      const result = { ...cur, ...patch };
+      if (result.endWeek < result.startWeek) throw new ApiError(400, "שבוע הסיום אינו יכול להיות לפני שבוע ההתחלה");
+      return result;
+    });
+    if (action !== "delete") {
+      const others = await tx.select().from(workItems).where(and(inArray(workItems.rowId, rows.map((r) => r.id)), isNull(workItems.deletedAt)));
+      const clash = batchOverlap({ rows: rows.map(rowToDTO), items: others.map(itemToDTO) }, next.map(itemToDTO));
+      if (clash) throw new ApiError(409, `הפעולה כולה בוטלה: הטווח חופף לתכולה "${clash.name}"`, { conflict: "overlap" });
+    }
+    // The exclusion constraint is immediate. Hide old positions inside this
+    // transaction so adjacent selected items can move into one another's old slots.
+    // Readers see either the old arrangement or the complete committed result.
+    await tx.update(workItems).set({ deletedAt: now }).where(inArray(workItems.id, ids));
+    const out: ItemDTO[] = [];
+    for (const n of next) {
+      const cur = current.find((i) => i.id === n.id)!;
+      const patch = action === "update" ? entries.find((e) => e.id === n.id)!.patch! : {};
+      const [updated] = await tx.update(workItems).set({ ...patch,
+        deletedAt: action === "delete" ? now : null, deletedById: action === "delete" ? me.id : null,
+        version: cur.version + 1, updatedAt: now, updatedById: me.id,
+      }).where(eq(workItems.id, n.id)).returning();
+      const changes = action === "update" ? diff(cur as unknown as Record<string, unknown>, patch) : null;
+      await audit(tx, me.id, "item", n.id, action, changes, action === "update" ? summarizeDiff(changes!, cat) : `${action === "delete" ? "נמחקה" : "שוחזרה"} תכולה "${n.name}" (פעולה קבוצתית)`);
+      out.push(itemToDTO(updated));
+    }
     return out;
   });
 }
