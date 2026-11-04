@@ -59,6 +59,7 @@ describe("mcp week parsing", () => {
 });
 
 import { isCimdClientId, isPrivateIp, loadCimd, parseCimdDocument } from "@/lib/cimd";
+import { assertionIssuer, verifyClientAssertion, type Jwk } from "@/lib/clientAssertion";
 import { verifyIdTokenClaims, decodeJwtPayload, googleOwnsEmail } from "@/lib/googleClaims";
 
 describe("client id metadata documents (CIMD)", () => {
@@ -78,7 +79,7 @@ describe("client id metadata documents (CIMD)", () => {
   });
 
   it("loads a valid document", async () => {
-    expect(await loadCimd(url, deps(["160.79.104.10"], doc))).toEqual({ name: "Claude", redirectUris: doc.redirect_uris });
+    expect(await loadCimd(url, deps(["160.79.104.10"], doc))).toEqual({ name: "Claude", redirectUris: doc.redirect_uris, authMethod: "none", jwksUri: null });
   });
 
   it("refuses private network hosts (SSRF)", async () => {
@@ -92,7 +93,12 @@ describe("client id metadata documents (CIMD)", () => {
   it("requires the document to name itself and list valid redirect URIs", async () => {
     expect(() => parseCimdDocument(url, { ...doc, client_id: "https://evil.example/x" })).toThrow(/does not match/);
     expect(() => parseCimdDocument(url, { ...doc, redirect_uris: ["http://evil.example/cb"] })).toThrow(/redirect_uris/);
-    expect(() => parseCimdDocument(url, { ...doc, token_endpoint_auth_method: "private_key_jwt" })).toThrow(/unsupported/);
+    expect(() => parseCimdDocument(url, { ...doc, token_endpoint_auth_method: "client_secret_basic" })).toThrow(/unsupported/);
+    // ChatGPT: חתימה במפתח (private_key_jwt) — חובה jwks_uri ב-https
+    expect(parseCimdDocument(url, { ...doc, token_endpoint_auth_method: "private_key_jwt", jwks_uri: "https://chatgpt.com/oauth/jwks.json" }))
+      .toMatchObject({ authMethod: "private_key_jwt", jwksUri: "https://chatgpt.com/oauth/jwks.json" });
+    expect(() => parseCimdDocument(url, { ...doc, token_endpoint_auth_method: "private_key_jwt" })).toThrow(/jwks_uri/);
+    expect(() => parseCimdDocument(url, { ...doc, token_endpoint_auth_method: "private_key_jwt", jwks_uri: "http://x.example/jwks" })).toThrow(/jwks_uri/);
     await expect(loadCimd(url, deps(["8.8.8.8"], doc, 404))).rejects.toThrow(/404/);
   });
 });
@@ -151,5 +157,49 @@ describe("redirect URI matching (RFC 8252 loopback)", () => {
     expect(redirectUriMatches(reg, "https://localhost:54123/callback")).toBe(false);
     expect(redirectUriMatches(reg, "https://claude.ai:8443/api/mcp/auth_callback")).toBe(false);
     expect(redirectUriMatches(["http://localhost/callback"], "http://127.0.0.1:5000/callback")).toBe(false);
+  });
+});
+
+describe("private_key_jwt client assertion (RFC 7523) — ChatGPT", () => {
+  const clientId = "https://chatgpt.com/oauth/client.json";
+  const audiences = ["https://app.example/api/oauth/token", "https://app.example"];
+  const rsa = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const other = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const ec = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const jwk = (k: crypto.KeyObject, kid: string) => ({ ...(k.export({ format: "jwk" }) as object), kid, use: "sig" }) as Jwk;
+  const keys = [jwk(rsa.publicKey, "k1"), jwk(ec.publicKey, "e1")];
+  const now = Date.now(), sec = Math.floor(now / 1000);
+  const sign = (claims: Record<string, unknown>, o: { alg?: string; kid?: string; key?: crypto.KeyObject } = {}) => {
+    const alg = o.alg ?? "RS256";
+    const h = Buffer.from(JSON.stringify({ alg, kid: o.kid ?? (alg === "ES256" ? "e1" : "k1"), typ: "JWT" })).toString("base64url");
+    const p = Buffer.from(JSON.stringify(claims)).toString("base64url");
+    const key = o.key ?? (alg === "ES256" ? ec.privateKey : rsa.privateKey);
+    const sig = alg === "none" ? Buffer.alloc(0) : crypto.sign("sha256", Buffer.from(`${h}.${p}`), alg === "ES256" ? { key, dsaEncoding: "ieee-p1363" } : key);
+    return `${h}.${p}.${sig.toString("base64url")}`;
+  };
+  const good = { iss: clientId, sub: clientId, aud: audiences[0], exp: sec + 300, iat: sec, jti: "abc" };
+  const verify = (jwt: string) => verifyClientAssertion(jwt, { clientId, audiences, keys, now });
+
+  it("accepts a valid RS256 / ES256 assertion and returns a replay key", () => {
+    expect(verify(sign(good)).replayKey).toBe(`${clientId}|abc`);
+    expect(verify(sign({ ...good, aud: ["x", "https://app.example/"] }, { alg: "ES256" })).replayKey).toBe(`${clientId}|abc`);
+    expect(assertionIssuer(sign(good))).toBe(clientId);
+  });
+  it("rejects a wrong key, tampered payload, alg none / HMAC, and unknown kid", () => {
+    expect(() => verify(sign(good, { key: other.privateKey }))).toThrow(/signature/);
+    const [h, , s] = sign(good).split(".");
+    expect(() => verify(`${h}.${Buffer.from(JSON.stringify({ ...good, sub: "x" })).toString("base64url")}.${s}`)).toThrow(/signature/);
+    expect(() => verify(sign(good, { alg: "none" }))).toThrow(/algorithm/);
+    expect(() => verify(sign(good, { alg: "HS256" }))).toThrow(/algorithm/);
+    expect(() => verify(sign(good, { kid: "unknown" }))).toThrow(/no matching key/);
+  });
+  it("rejects wrong issuer / subject / audience and bad lifetimes", () => {
+    expect(() => verify(sign({ ...good, iss: "https://evil.example/c.json" }))).toThrow(/iss\/sub/);
+    expect(() => verify(sign({ ...good, sub: "someone" }))).toThrow(/iss\/sub/);
+    expect(() => verify(sign({ ...good, aud: "https://other.example/token" }))).toThrow(/audience/);
+    expect(() => verify(sign({ ...good, exp: sec - 3600 }))).toThrow(/expired/);
+    expect(() => verify(sign({ ...good, exp: undefined }))).toThrow(/expired/);
+    expect(() => verify(sign({ ...good, exp: sec + 86400 }))).toThrow(/too long/);
+    expect(() => verify(sign({ ...good, nbf: sec + 3600 }))).toThrow(/not yet/);
   });
 });

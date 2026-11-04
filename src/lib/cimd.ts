@@ -28,7 +28,8 @@ export function isPrivateIp(ip: string): boolean {
     || x.startsWith("fea") || x.startsWith("feb") || x.startsWith("ff");
 }
 
-export type CimdClient = { name: string; redirectUris: string[] };
+/** authMethod: "none" (לקוח ציבורי, PKCE בלבד) או "private_key_jwt" (חתימה במפתח שמפורסם ב-jwksUri — למשל ChatGPT) */
+export type CimdClient = { name: string; redirectUris: string[]; authMethod: "none" | "private_key_jwt"; jwksUri: string | null };
 
 /** בדיקת תוכן המסמך */
 export function parseCimdDocument(url: string, doc: unknown): CimdClient {
@@ -37,9 +38,16 @@ export function parseCimdDocument(url: string, doc: unknown): CimdClient {
   const uris = Array.isArray(d.redirect_uris) ? d.redirect_uris.filter((x): x is string => typeof x === "string") : [];
   if (!uris.length || uris.length > 20 || uris.some((u) => !validRedirectUri(u))) throw new Error("invalid redirect_uris in the metadata document");
   const method = d.token_endpoint_auth_method ?? "none";
-  if (method !== "none") throw new Error(`unsupported token_endpoint_auth_method: ${String(method)}`);
+  if (method !== "none" && method !== "private_key_jwt") throw new Error(`unsupported token_endpoint_auth_method: ${String(method)}`);
+  let jwksUri: string | null = null;
+  if (method === "private_key_jwt") {
+    jwksUri = typeof d.jwks_uri === "string" ? d.jwks_uri : "";
+    let ok = false;
+    try { const j = new URL(jwksUri); ok = j.protocol === "https:" && !j.username && !j.password && jwksUri.length <= 2048; } catch { ok = false; }
+    if (!ok) throw new Error("private_key_jwt requires an https jwks_uri in the metadata document");
+  }
   const name = (typeof d.client_name === "string" && d.client_name.trim() ? d.client_name.trim() : new URL(url).host).slice(0, 80);
-  return { name, redirectUris: uris };
+  return { name, redirectUris: uris, authMethod: method, jwksUri };
 }
 
 export type CimdDeps = {

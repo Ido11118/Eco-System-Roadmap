@@ -16,6 +16,7 @@ import {
   validRedirectUri, validResource, validScope, verifyPkce, type Access,
 } from "@/lib/oauth";
 import { CIMD_MAX_BYTES, isCimdClientId, isPrivateIp, loadCimd } from "@/lib/cimd";
+import { AssertionError, JWT_BEARER, assertionIssuer, verifyClientAssertion, type Jwk } from "@/lib/clientAssertion";
 import { loadMe } from "./auth";
 import { appUrl } from "./google";
 import { audit } from "./plan";
@@ -54,8 +55,10 @@ export function authorizationServerMetadata() {
     response_types_supported: ["code"],
     response_modes_supported: ["query"],
     grant_types_supported: ["authorization_code", "refresh_token"],
-    token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
-    revocation_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
+    token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic", "private_key_jwt"],
+    token_endpoint_auth_signing_alg_values_supported: ["RS256", "PS256", "ES256"],
+    revocation_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic", "private_key_jwt"],
+    revocation_endpoint_auth_signing_alg_values_supported: ["RS256", "PS256", "ES256"],
     code_challenge_methods_supported: ["S256"],
     authorization_response_iss_parameter_supported: true,
     // לקוחות יכולים להזדהות בכתובת מסמך זיהוי במקום רישום (Claude: "Use Claude's published identity")
@@ -118,14 +121,68 @@ async function cimdClient(url: string) {
   try {
     rateLimit("cimd-fetch", 60); // הגבלה כוללת על קריאות רשת למסמכי זיהוי (מונע ניצול השרת לשליחת בקשות / מילוי הטבלה)
     const c = await loadCimd(url, { lookup: lookupAll, fetchText: fetchDoc });
-    const row = { id: url, name: c.name, redirectUris: c.redirectUris, authMethod: "none", secretHash: null, fetchedAt: new Date() };
+    if (c.jwksUri) jwksUriOf.set(url, c.jwksUri);
+    const row = { id: url, name: c.name, redirectUris: c.redirectUris, authMethod: c.authMethod, secretHash: null, fetchedAt: new Date() };
     const [saved] = await db.insert(oauthClients).values(row)
-      .onConflictDoUpdate({ target: oauthClients.id, set: { name: row.name, redirectUris: row.redirectUris, fetchedAt: row.fetchedAt } }).returning();
+      .onConflictDoUpdate({ target: oauthClients.id, set: { name: row.name, redirectUris: row.redirectUris, authMethod: row.authMethod, fetchedAt: row.fetchedAt } }).returning();
     return saved;
   } catch (e) {
     console.warn(`CIMD client ${url}: ${(e as Error).message}`);
     return cached ?? null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// private_key_jwt: המפתחות הציבוריים של הלקוח (jwks_uri ממסמך הזיהוי), ומניעת שימוש חוזר בחתימה
+// ---------------------------------------------------------------------------
+
+const jwksUriOf = new Map<string, string>(); // client_id → jwks_uri (נקרא ממסמך הזיהוי)
+const jwksCache = new Map<string, { keys: Jwk[]; at: number }>();
+const JWKS_TTL_MS = 10 * 60000;
+const usedAssertions = new Map<string, number>(); // מפתח זיהוי → עד מתי לזכור
+
+async function clientJwksUri(clientId: string): Promise<string> {
+  const known = jwksUriOf.get(clientId);
+  if (known) return known;
+  const c = await loadCimd(clientId, { lookup: lookupAll, fetchText: fetchDoc }); // אחרי הפעלה מחדש של השרת — קוראים שוב את המסמך
+  if (!c.jwksUri) throw new OAuthError(401, "invalid_client", "client has no jwks_uri");
+  jwksUriOf.set(clientId, c.jwksUri);
+  return c.jwksUri;
+}
+
+async function clientKeys(clientId: string, force = false): Promise<Jwk[]> {
+  const hit = jwksCache.get(clientId);
+  if (hit && !force && Date.now() - hit.at < JWKS_TTL_MS) return hit.keys;
+  rateLimit(`jwks:${clientId}`, 30); // מפתח לא מוכר (kid חדש) גורם לקריאה מחדש — אבל לא בלי הגבלה
+  const r = await fetchDoc(await clientJwksUri(clientId)); // אותן הגנות SSRF וגודל כמו מסמך הזיהוי
+  if (r.status !== 200 || r.text.length > CIMD_MAX_BYTES) throw new OAuthError(401, "invalid_client", `could not load the client's keys (HTTP ${r.status})`);
+  let keys: Jwk[] = [];
+  try { const j = JSON.parse(r.text) as { keys?: Jwk[] }; keys = Array.isArray(j.keys) ? j.keys.slice(0, 20) : []; } catch { keys = []; }
+  if (!keys.length) throw new OAuthError(401, "invalid_client", "the client's key set is empty or invalid");
+  jwksCache.set(clientId, { keys, at: Date.now() });
+  return keys;
+}
+
+/** אימות החתימה של הלקוח בבקשת מפתחות / ביטול (RFC 7523) */
+async function verifyAssertionFor(clientId: string, assertion: string) {
+  const audiences = [`${appUrl()}/api/oauth/token`, `${appUrl()}/api/oauth/revoke`, appUrl()];
+  const check = (keys: Jwk[]) => verifyClientAssertion(assertion, { clientId, audiences, keys });
+  let res: ReturnType<typeof verifyClientAssertion>;
+  try {
+    try { res = check(await clientKeys(clientId)); }
+    catch (e) {
+      // ייתכן שהלקוח החליף מפתח (kid חדש) — קוראים את המפתחות מחדש פעם אחת
+      if (!(e instanceof AssertionError) || !/no matching key|signature/.test(e.message)) throw e;
+      res = check(await clientKeys(clientId, true));
+    }
+  } catch (e) {
+    if (e instanceof AssertionError) throw new OAuthError(401, "invalid_client", e.message);
+    throw e;
+  }
+  const now = Date.now();
+  if (usedAssertions.size > 5000) for (const [k, until] of usedAssertions) if (until < now) usedAssertions.delete(k);
+  if ((usedAssertions.get(res.replayKey) ?? 0) > now) throw new OAuthError(401, "invalid_client", "client assertion was already used");
+  usedAssertions.set(res.replayKey, res.expiresAt);
 }
 
 async function lookupAll(host: string) {
@@ -224,8 +281,18 @@ type TokenParams = Record<string, string | undefined>;
 
 /** זיהוי הלקוח בנקודת המפתחות: לקוח ציבורי — לפי client_id; לקוח עם סוד — חובה להציג אותו */
 async function authenticateClient(p: TokenParams, basic: { id: string; secret: string } | null) {
-  const client = await getClient(basic?.id ?? p.client_id);
+  const assertion = p.client_assertion_type === JWT_BEARER ? p.client_assertion : undefined;
+  if (p.client_assertion_type && !assertion) throw new OAuthError(400, "invalid_request", "unsupported client_assertion_type");
+  // עם חתימה, client_id לא חובה (RFC 7523) — מזהים לפי iss, ומוודאים התאמה אם נשלח
+  const id = basic?.id ?? p.client_id ?? (assertion ? assertionIssuer(assertion) ?? undefined : undefined);
+  if (assertion && p.client_id && assertionIssuer(assertion) !== p.client_id) throw new OAuthError(401, "invalid_client", "client_id does not match the client assertion");
+  const client = await getClient(id);
   if (!client) throw new OAuthError(401, "invalid_client", "unknown client");
+  if (client.authMethod === "private_key_jwt") {
+    if (!assertion) throw new OAuthError(401, "invalid_client", "this client must authenticate with private_key_jwt");
+    await verifyAssertionFor(client.id, assertion);
+    return client;
+  }
   if (client.authMethod !== "none") {
     const secret = basic?.secret ?? p.client_secret;
     const ok = !!secret && !!client.secretHash && crypto.timingSafeEqual(Buffer.from(hashToken(secret)), Buffer.from(client.secretHash));
