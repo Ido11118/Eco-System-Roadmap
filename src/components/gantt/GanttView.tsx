@@ -19,12 +19,12 @@ import { useTooltip } from "@/components/ui/tooltip";
 import { Floating, MenuItem } from "@/components/ui/popover";
 import { useConfirm } from "@/components/ui/dialog";
 import { findOverlap, type PlanStore } from "@/components/plan/store";
-import { uiZoom, useBarFontSize } from "@/components/plan/prefs";
+import { uiZoom, useBarFontSize, useGanttSize } from "@/components/plan/prefs";
 import { useWorkspaceUI, userName } from "@/components/plan/ui";
 import { CROSS_FILTER, crossRowVisible, hasContentFilter, hideDomain, hideTeam, itemMatches, onlyDomain, timeWindow, visibleTeamIds } from "@/components/plan/filters";
 import { useToast } from "@/components/ui/toast";
 import { GanttGrid, useCurrentWeek, type CrossGroup, type GanttGridHandle, type LaneSpec } from "./GanttGrid";
-import { geometry } from "./geometry";
+import { geometry, fitsTwoLines } from "./geometry";
 import { DepBadge, DepList } from "@/components/plan/Dependencies";
 
 type DragState = {
@@ -57,7 +57,8 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   const [barFont] = useBarFontSize(ui.me.preferences);
   const gridRef = useRef<GanttGridHandle>(null);
   const mobile = useIsMobile();
-  const { weekW, rowH, crossLaneH } = geometry(view.density, false, mobile);
+  const [gSize] = useGanttSize(ui.me.preferences);
+  const { weekW, rowH, crossLaneH } = geometry(view.density, false, mobile, gSize);
 
   const [win0, win1] = timeWindow(view.time, data);
   const timeline: Timeline = useMemo(() => buildTimeline(win0, win1), [win0, win1]);
@@ -344,6 +345,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     const dim = filtering && !matches(i);
     const isDragged = drag?.started && drag.item.id === i.id && !opts?.ghost;
     const selected = ui.selectedItemId === i.id;
+    const twoLines = fitsTwoLines(height - 6, barFont);
     return (
       <div key={opts?.ghost ? `g${i.id}` : i.id}
         data-bar={opts?.ghost ? undefined : i.id}
@@ -373,8 +375,9 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
           <span className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize opacity-0 group-hover/bar:opacity-100 bg-black/10" onMouseDown={(e) => startDrag(e, i, "end", true)} />
         )}
         {/* השם "נדבק" לקצה הגלוי: גם כשתחילת הקובייה גלולה מתחת לעמודות התחום/צוות, הטקסט נשאר גלוי עד שהקובייה נעלמת */}
-        <span className="sticky flex min-w-0 items-center gap-1 px-1.5" style={{ right: "var(--labels-w)" }}>
-          <DepBadge item={i} /><span className="truncate">{i.name}</span>
+        <span className="sticky flex min-w-0 max-w-full items-center gap-1 px-1.5" style={{ right: "var(--labels-w)" }}>
+          <DepBadge item={i} />
+          <span className={twoLines ? "line-clamp-2 whitespace-normal break-words leading-[1.2]" : "truncate"} data-bar-label>{i.name}</span>
         </span>
       </div>
     );
@@ -566,6 +569,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         teamEditable={(t) => store.canEditTeam(t)}
         // בטלפון אין סימון טווח (הקשה תמימה בזמן גלילה הייתה פותחת חלון הוספה) — מוסיפים מכפתור ה-+
         onLaneMouseDown={store.readOnly || mobile ? undefined : onLaneMouseDown} onLaneContextMenu={onLaneContextMenu}
+        panMode={store.readOnly && !mobile}
         onLabelContextMenu={setView ? (e, domainId, teamId) => openMenu({ x: e.clientX, y: e.clientY, teamId, label: { domainId, teamId } }) : undefined} />
 
       {drag?.started && !drag.valid && drag.reason && (

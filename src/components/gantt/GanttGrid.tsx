@@ -54,7 +54,43 @@ type Props = {
   emptyText?: React.ReactNode;
   /** הצגת סימון "צפייה בלבד" לצוותים ללא הרשאה (לא רלוונטי במצב השוואה) */
   readOnlyHints?: boolean;
+  /** צפייה בלבד: גרירה בעכבר מזיזה את התצוגה (סמן "יד") — כמו גרירת מפה */
+  panMode?: boolean;
 };
+
+/**
+ * גרירת התצוגה בעכבר: לוחצים ("תופסים" את המסך) וגוררים לכל כיוון. נכנס לפעולה רק אחרי תזוזה של 4px —
+ * כך קליק רגיל (על קובייה, אבן דרך וכו') ממשיך לעבוד, ואחרי גרירה הקליק שבסופה לא נחשב.
+ */
+function usePanDrag(scrollRef: React.RefObject<HTMLDivElement | null>, enabled: boolean) {
+  const [panning, setPanning] = useState(false);
+  const onMouseDownCapture = (e: React.MouseEvent) => {
+    const el = scrollRef.current;
+    if (!enabled || !el || e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("input,select,textarea,[data-no-pan]")) return;
+    const x0 = e.clientX, y0 = e.clientY, sl = el.scrollLeft, st = el.scrollTop;
+    let moved = false;
+    const move = (ev: MouseEvent) => {
+      const dx = ev.clientX - x0, dy = ev.clientY - y0;
+      if (!moved && Math.hypot(dx, dy) < 4) return;
+      if (!moved) { moved = true; setPanning(true); document.body.style.userSelect = "none"; window.getSelection()?.removeAllRanges(); }
+      el.scrollLeft = sl - dx; // התוכן "נצמד" לעכבר (נכון גם ב-RTL — scrollLeft גדל ימינה בכל כיוון כתיבה)
+      el.scrollTop = st - dy;
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
+      document.body.style.userSelect = "";
+      if (!moved) return;
+      setPanning(false);
+      // הקליק שבסוף הגרירה — לא פותח קובייה / תפריט
+      const stop = (ce: Event) => { ce.stopPropagation(); ce.preventDefault(); };
+      window.addEventListener("click", stop, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener("click", stop, { capture: true }), 0);
+    };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  };
+  return { panning, onMouseDownCapture };
+}
 
 export function weekIndexFromEvent(e: { clientX: number }, el: HTMLElement, weekW: number) {
   const r = el.getBoundingClientRect(); // קואורדינטות מסך (כולל הגדלת התצוגה) — לכן מחלקים ברוחב השבוע המוגדל
@@ -66,6 +102,7 @@ const MOBILE_COLS: GanttCols = { domain: 56, team: 76 };
 export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttGrid(p, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const tip = useTooltip();
+  const pan = usePanDrag(scrollRef, !!p.panMode);
   const W = p.timeline.weeks.length * p.weekW;
   // רוחב עמודות התחום/הצוות — אישי לכל משתמש. בזמן גרירה מוצג מיד, ונשמר בשחרור העכבר
   const [savedCols, saveCols] = useGanttCols(useMe()?.preferences ?? {});
@@ -128,7 +165,8 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
 
   return (
     <div className="relative h-full w-full">
-    <div ref={scrollRef} className="gantt-scroll relative h-full w-full overflow-auto bg-white" data-testid="gantt-scroll">
+    <div ref={scrollRef} className={clsx("gantt-scroll relative h-full w-full overflow-auto bg-white", p.panMode && (pan.panning ? "cursor-grabbing [&_*]:!cursor-grabbing" : "cursor-grab"))}
+      data-testid="gantt-scroll" data-pan={p.panMode || undefined} onMouseDownCapture={pan.onMouseDownCapture}>
       <div style={{ width: labelW + W, ["--week-w" as string]: `${p.weekW}px`, ["--labels-w" as string]: `${labelW}px` }} className="relative">
         {/* ---------------- כותרות קפואות ---------------- */}
         <div className="sticky top-0 z-30 bg-white shadow-[0_1px_0_var(--line-strong)]">

@@ -43,8 +43,8 @@ export function AiConnections() {
           </div>
         </div>
         <ul className="list-disc space-y-0.5 pr-5 text-[12.5px] text-ink-500">
-          <li><b>Claude</b> (אתר / אפליקציה): Customize ← Connectors ← Add ← Add custom connector ← שם + הדבקת הכתובת ← Continue ← Add, ואז Connect. בחשבון Team / Enterprise — מנהל החשבון מוסיף את ה-Connector פעם אחת, וכל אחד לוחץ Connect.</li>
-          <li><b>ChatGPT</b>: בהגדרות ← Apps / Connectors ← הפעלת Developer mode ← יצירת Connector חדש ← הדבקת הכתובת, אימות OAuth.</li>
+          <li><b>Claude</b> (חשבון אישי בלבד — <b>לא עובד עם ה-Claude הארגוני שלנו</b>): Settings ← Connectors ← Add custom connector ← שם + הדבקת הכתובת ← Add, ואז Connect.</li>
+          <li><b>ChatGPT</b>: בסרגל הצד ← Plugins ← בפינה הימנית העליונה Add ← Add custom MCP server ← שם + הדבקת הכתובת ← התחברות למשתמש שלך ומתן הרשאה.</li>
           <li>בחלון שייפתח מתחברים למערכת ובוחרים <b>קריאה בלבד</b> או <b>קריאה ועריכה</b>.</li>
         </ul>
       </section>

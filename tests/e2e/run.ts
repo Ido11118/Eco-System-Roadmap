@@ -1141,6 +1141,7 @@ async function main() {
     await pAdmin.waitForSelector(`[data-bar="${it.id}"]`);
     // גודל הטקסט בקוביות
     await pAdmin.click("[data-testid=display-options]");
+    await pAdmin.click("[data-testid=advanced-display]"); // הסליידר עבר ל"הגדרות תצוגה מתקדמות"
     const v0 = parseInt(await pAdmin.locator("[data-testid=bar-font-value]").innerText());
     await pAdmin.locator("[data-testid=bar-font]").focus();
     await pAdmin.keyboard.press("ArrowUp"); await pAdmin.keyboard.press("ArrowUp");
@@ -1273,7 +1274,7 @@ async function main() {
     // ברירת המחדל: לשונית חיבור Claude / ChatGPT, עם הכתובת והוראות לכל כלי
     await pa.waitForSelector("[data-testid=ai-mcp]");
     await pa.waitForFunction((u) => (document.querySelector("[data-testid=mcp-guide-url]") as HTMLInputElement | null)?.value === u, `${BASE}/api/mcp`, { timeout: 10000 });
-    for (const t of ["claude", "claude-org", "chatgpt", "claude-code"]) { await pa.click(`[data-testid=mcp-tool-${t}]`); await pa.waitForSelector(`[data-testid=mcp-steps-${t}]`); }
+    for (const t of ["claude", "chatgpt", "claude-code"]) { await pa.click(`[data-testid=mcp-tool-${t}]`); await pa.waitForSelector(`[data-testid=mcp-steps-${t}]`); }
     assert(!(await pa.locator("[data-testid=ai-import]").count()), "JSON flow shown by default");
     await pa.click("[data-testid=ai-tab-json]");
     await pa.waitForSelector("[data-testid=ai-import]");
@@ -1382,6 +1383,9 @@ async function main() {
     await pa.waitForSelector("[data-testid=view-only-banner]");
     assert(await pa.locator(`[data-testid=status-${it.id}]`).isDisabled(), "status editable in view-only");
     assert(!(await pa.locator("[data-testid=add-fab]").count()), "add button shown in view-only");
+    await pa.click("[data-testid=add-fab-locked]");
+    await pa.getByText("אתה במצב צפייה. עבור למצב עריכה כדי להוסיף תכולות").first().waitFor({ timeout: 5000 });
+    assert(!(await pa.locator("[data-testid=add-item]").count()), "add menu opened in view-only");
     assert(!(await pa.locator("[data-testid=deleted-items]").count()), "deleted-items shown in view-only");
     // נשמר אחרי רענון; בגאנט: לחיצה כפולה על תא לא פותחת הוספה, וחלונית התכולה לקריאה בלבד
     await pa.goto(`${BASE}/plan?view=gantt`);
@@ -1769,6 +1773,113 @@ async function main() {
     const gcb = await P.get(`/api/auth/google/callback?state=wrong&code=x`, { maxRedirects: 0 });
     assert((gcb.headers()["location"] ?? "").includes("/login?error="), `google callback with bad state: ${gcb.headers()["location"]}`);
     await pH.context().close();
+  });
+
+  await scenario(60, "הגדרות תצוגה מתקדמות (רוחב עמודה, גובה שורה, גודל מלל — בר ומספר); שם ארוך גולש לשתי שורות; גרירת התצוגה במצב צפייה בלבד", async () => {
+    const row = await newRow(A, T_AZ1);
+    const long = await json<ItemDTO>(A, "POST", "/api/items", { rowId: row.id, name: `שם ארוך מאוד של תכולה שלא נכנס בקובייה אחת ${RUN}`, startWeek: cw, endWeek: cw });
+    assert(long.status === 200, "create long item");
+    await pa.goto(`${BASE}/plan?view=gantt`); await pa.waitForSelector(`[data-bar="${long.body.id}"]`);
+    const barH = async () => (await pa.locator(`[data-bar="${long.body.id}"]`).boundingBox())!.height;
+    const lines = async () => pa.locator(`[data-bar="${long.body.id}"] [data-bar-label]`).evaluate((el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)));
+    const h0 = await barH();
+    assert((await lines()) === 1, "label should be one line at default row height");
+    await pa.click("[data-testid=display-options]");
+    await pa.click("[data-testid=advanced-display]");
+    // גובה שורה במספר ידני; רוחב עמודה בבר
+    await pa.fill("[data-testid=row-height-input]", "56"); await pa.keyboard.press("Enter");
+    await pa.locator("[data-testid=week-width]").focus();
+    for (let k = 0; k < 6; k++) await pa.keyboard.press("ArrowUp");
+    await pa.waitForTimeout(300);
+    assert(Math.round(await barH()) === 50, `bar height ${await barH()} (row 56 → bar 50)`);
+    assert(/^\d+px$/.test(await pa.innerText("[data-testid=week-width-value]")), "week width value missing");
+    assert((await lines()) === 2, "long name should wrap to two lines when the row is tall enough");
+    // ערך מחוץ לטווח נחתך לגבול
+    await pa.fill("[data-testid=row-height-input]", "999"); await pa.keyboard.press("Enter");
+    assert((await pa.innerText("[data-testid=row-height-value]")).startsWith("72"), "row height not clamped to 72");
+    // נשמר אחרי רענון
+    await pa.reload(); await pa.waitForSelector(`[data-bar="${long.body.id}"]`);
+    assert(Math.round(await barH()) === 66, `after reload bar height ${await barH()}`);
+    // איפוס לברירת המחדל
+    await pa.click("[data-testid=display-options]"); await pa.click("[data-testid=advanced-display]"); await pa.click("[data-testid=advanced-reset]");
+    await pa.keyboard.press("Escape"); await pa.waitForTimeout(300);
+    assert(Math.round(await barH()) === Math.round(h0), `after reset bar height ${await barH()} (expected ${h0})`);
+    // מצב צפייה בלבד: גרירה מזיזה את התצוגה ולא פותחת תקציר
+    await pa.click("[data-testid=view-only-toggle]");
+    await pa.waitForSelector("[data-testid=gantt-scroll][data-pan]");
+    const sc = pa.locator("[data-testid=gantt-scroll]");
+    const b = (await sc.boundingBox())!;
+    const before = await sc.evaluate((el) => ({ l: el.scrollLeft, t: el.scrollTop }));
+    await pa.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await pa.mouse.down();
+    await pa.mouse.move(b.x + b.width / 2 + 200, b.y + b.height / 2 - 120, { steps: 8 });
+    await pa.mouse.up();
+    const after = await sc.evaluate((el) => ({ l: el.scrollLeft, t: el.scrollTop }));
+    assert(after.l < before.l - 100 && after.t > before.t + 50, `pan did not scroll: ${JSON.stringify(before)} → ${JSON.stringify(after)}`);
+    await pa.waitForTimeout(400);
+    assert(!(await pa.locator("[data-testid=item-summary]").count()), "drag opened an item summary");
+    await pa.click("[data-testid=view-only-toggle]");
+  });
+
+  await scenario(62, "תצוגה שמורה כוללת גם את אפשרויות התצוגה (גודל תצוגה, גובה שורה, גודל מלל) — ונטענת יחד עם המסננים", async () => {
+    await pa.goto(`${BASE}/plan?view=gantt`); await pa.waitForSelector("[data-testid=gantt-view]");
+    const zoom = () => pa.locator("[data-testid=sidebar]").evaluate((el) => getComputedStyle(el.parentElement!).zoom);
+    const rowInput = () => pa.inputValue("[data-testid=row-height-input]");
+    // ההגדרות המתקדמות נשארות פתוחות בין פתיחות החלון — פותחים רק אם סגורות
+    const openAdvanced = async () => { if (!(await pa.locator("[data-testid=advanced-display-panel]").count())) await pa.click("[data-testid=advanced-display]"); };
+    // מצב לשמירה: גודל תצוגה "גדול", גובה שורה 48, מלל 14 + סינון סטטוס
+    await pa.click("[data-testid=display-options]");
+    await pa.click("[data-testid=text-size] [data-value=lg]");
+    await openAdvanced();
+    await pa.fill("[data-testid=row-height-input]", "48"); await pa.keyboard.press("Enter");
+    await pa.fill("[data-testid=bar-font-input]", "14"); await pa.keyboard.press("Enter");
+    await pa.keyboard.press("Escape");
+    await pa.click("[data-testid=saved-views]");
+    await pa.fill("[data-testid=view-name]", `תצוגה-${RUN}`); await pa.keyboard.press("Enter");
+    await pa.waitForSelector(`text=תצוגה-${RUN}`);
+    await pa.keyboard.press("Escape");
+    const saved = (await json<{ name: string; config: { display?: { textSize?: string; ganttSize?: { rowH?: number }; barFontSize?: number } } }[]>(A, "GET", "/api/views")).body.find((v) => v.name === `תצוגה-${RUN}`)!;
+    assert(saved.config.display?.textSize === "lg" && saved.config.display?.ganttSize?.rowH === 48 && saved.config.display?.barFontSize === 14, `display not saved: ${JSON.stringify(saved.config.display)}`);
+    // שינוי חזרה לברירת המחדל
+    await pa.click("[data-testid=display-options]");
+    await pa.click("[data-testid=text-size] [data-value=md]");
+    await openAdvanced(); await pa.click("[data-testid=advanced-reset]");
+    await pa.keyboard.press("Escape"); await pa.waitForTimeout(300);
+    assert((await zoom()) === "1", "zoom not reset");
+    // טעינת התצוגה השמורה מחזירה גם את אפשרויות התצוגה
+    await pa.click("[data-testid=saved-views]"); await pa.click(`text=תצוגה-${RUN}`); await pa.waitForTimeout(400);
+    assert((await zoom()) === "1.12", `zoom after loading view: ${await zoom()}`);
+    await pa.click("[data-testid=display-options]"); await openAdvanced();
+    assert((await rowInput()) === "48" && (await pa.inputValue("[data-testid=bar-font-input]")) === "14", "row height / font not restored");
+    // ניקוי: חזרה לגודל רגיל
+    await pa.click("[data-testid=advanced-reset]"); await pa.click("[data-testid=text-size] [data-value=md]"); await pa.keyboard.press("Escape");
+  });
+
+  await scenario(61, "עין להצגת הסיסמה במסך ההתחברות ובמסך איפוס הסיסמה; ההתחברות והאיפוס עובדים", async () => {
+    const ctx2 = await browser.newContext({ locale: "he-IL" });
+    const p = await ctx2.newPage();
+    try {
+      // התחברות: מוסתרת כברירת מחדל, העין מציגה ומסתירה, וההתחברות עצמה עובדת
+      await p.goto(`${BASE}/login`);
+      await p.fill("#email", uA.email); await p.fill("#password", PW);
+      assert((await p.getAttribute("#password", "type")) === "password", "login password visible by default");
+      await p.click("[data-testid=password-eye]");
+      assert((await p.getAttribute("#password", "type")) === "text", "login eye did not reveal the password");
+      assert((await p.inputValue("#password")) === PW, "password text changed when revealed");
+      await p.click("[data-testid=password-eye]");
+      assert((await p.getAttribute("#password", "type")) === "password", "login eye did not hide the password");
+      await p.click("form button.btn-primary"); await p.waitForURL(/\/plan/, { timeout: 60000 });
+      // איפוס סיסמה: עין + סימון התאמה, והאיפוס עובד
+      const link = (await json<{ link: string }>(admin, "POST", `/api/admin/users/${await userId(uA.email)}`, { action: "resetLink" })).body.link;
+      assert(link?.includes("/reset?token="), `no reset link: ${link}`);
+      await p.goto(link.replace(/^https?:\/\/[^/]+/, BASE));
+      await p.fill("#reset-p1", PW); await p.fill("#reset-p2", PW);
+      await p.click("[data-testid=reset-p1-eye]");
+      assert((await p.getAttribute("#reset-p1", "type")) === "text" && (await p.getAttribute("#reset-p2", "type")) === "text", "reset eye did not reveal both fields");
+      assert(await p.locator("[data-testid=reset-p2-match]").isVisible(), "no match mark on reset page");
+      await p.click("form button.btn-primary");
+      await p.waitForSelector("text=הסיסמה עודכנה בהצלחה");
+    } finally { await ctx2.close(); }
   });
 
   await browser.close();

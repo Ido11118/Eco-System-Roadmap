@@ -8,11 +8,10 @@ import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 
 type Conn = { id: number; client: string; access: "read" | "write" };
-type Tool = "claude" | "claude-org" | "chatgpt" | "claude-code";
+type Tool = "claude" | "chatgpt" | "claude-code";
 
 const TOOLS: { key: Tool; label: string }[] = [
   { key: "claude", label: "Claude" },
-  { key: "claude-org", label: "Claude לארגון (Team / Enterprise)" },
   { key: "chatgpt", label: "ChatGPT" },
   { key: "claude-code", label: "Claude Code" },
 ];
@@ -83,29 +82,25 @@ export function McpGuide({ onOpenSettings }: { onOpenSettings?: () => void }) {
 
         <ol className="mt-3 space-y-2.5" data-testid={`mcp-steps-${tool}`}>
           {tool === "claude" && <>
-            <S n={1}>נכנסים ל-<a href="https://claude.ai/settings/connectors" target="_blank" rel="noreferrer" className="text-brand-600 underline">claude.ai</a> (או לאפליקציית Claude במחשב) ופותחים <Ui>Settings</Ui><Arrow /><Ui>Connectors</Ui>.</S>
+            <li className="flex items-start gap-1.5 rounded-md border border-red-200 bg-red-50 p-2 text-[12.5px] text-red-800" data-testid="mcp-claude-org-warning">
+              <ShieldCheck size={15} className="mt-0.5 shrink-0" />
+              <span><b>שימו לב: זה לא עובד עם ה-Claude הארגוני שלנו.</b> החיבור אפשרי רק מחשבון Claude אישי (פרטי).</span>
+            </li>
+            <S n={1}>נכנסים ל-<a href="https://claude.ai/settings/connectors" target="_blank" rel="noreferrer" className="text-brand-600 underline">claude.ai</a> בחשבון <b>האישי</b> (או לאפליקציית Claude במחשב) ופותחים <Ui>Settings</Ui><Arrow /><Ui>Connectors</Ui>.</S>
             <S n={2}>לוחצים <Ui>Add custom connector</Ui>.</S>
             <S n={3}>בשדה <Ui>Name</Ui> כותבים <b>תוכנית עבודה</b>, ובשדה <Ui>URL</Ui> מדביקים את {UrlBox}. לוחצים <Ui>Add</Ui>.</S>
             <S n={4}>ליד ״תוכנית עבודה״ לוחצים <Ui>Connect</Ui>. נפתח חלון של המערכת.</S>
             <S n={5}>בחלון מתחברים (מייל וסיסמה או Google), בוחרים <b>קריאה בלבד</b> או <b>קריאה ועריכה</b>, ולוחצים <b>אישור וחיבור</b>.</S>
             <S n={6}>בצ׳אט: לוחצים על <Ui>+</Ui> (או על סמל הכלים) בתיבת ההקלדה<Arrow /><Ui>Connectors</Ui><Arrow />מפעילים את <b>תוכנית עבודה</b>. מעכשיו פשוט כותבים מה צריך.</S>
-            <Note>זמין בכל התוכניות של Claude. בתוכנית החינמית אפשר להוסיף connector אחד בלבד. ייתכן ששמות התפריטים יהיו מעט שונים.</Note>
-          </>}
-          {tool === "claude-org" && <>
-            <S n={1}><b>מנהל חשבון ה-Claude של הארגון (Owner)</b>, פעם אחת: <Ui>Settings</Ui><Arrow /><Ui>Organization settings</Ui><Arrow /><Ui>Connectors</Ui><Arrow /><Ui>Add custom connector</Ui>.</S>
-            <S n={2}>שם: <b>תוכנית עבודה</b>. כתובת: {UrlBox}. לוחצים <Ui>Add</Ui>. מעכשיו ה-connector זמין לכל העובדים, אבל כל אחד מתחבר בנפרד, עם ההרשאות שלו.</S>
-            <S n={3}><b>כל עובד</b>: <Ui>Settings</Ui><Arrow /><Ui>Connectors</Ui><Arrow />מוצא את ״תוכנית עבודה״<Arrow /><Ui>Connect</Ui>.</S>
-            <S n={4}>בחלון של המערכת מתחברים, בוחרים רמת גישה ולוחצים <b>אישור וחיבור</b>.</S>
-            <S n={5}>בצ׳אט: <Ui>+</Ui><Arrow /><Ui>Connectors</Ui><Arrow />מפעילים את <b>תוכנית עבודה</b>.</S>
+            <Note>בתוכנית החינמית של Claude אפשר להוסיף connector אחד בלבד. ייתכן ששמות התפריטים יהיו מעט שונים.</Note>
           </>}
           {tool === "chatgpt" && <>
-            <S n={1}>ב-ChatGPT פותחים <Ui>Settings</Ui><Arrow /><Ui>Apps &amp; Connectors</Ui><Arrow /><Ui>Advanced settings</Ui>, ומפעילים <Ui>Developer mode</Ui>.</S>
-            <S n={2}>חוזרים ל-<Ui>Apps &amp; Connectors</Ui> ולוחצים <Ui>Create</Ui>.</S>
-            <S n={3}>שם: <b>תוכנית עבודה</b>. בשדה <Ui>MCP Server URL</Ui> מדביקים את {UrlBox}. בשדה <Ui>Authentication</Ui> בוחרים <Ui>OAuth</Ui>.</S>
-            <S n={4}>מסמנים שאתה סומך על ה-connector (<Ui>I trust this application</Ui>) ולוחצים <Ui>Create</Ui>. נפתח חלון של המערכת.</S>
-            <S n={5}>בחלון מתחברים, בוחרים רמת גישה ולוחצים <b>אישור וחיבור</b>.</S>
-            <S n={6}>בצ׳אט: <Ui>+</Ui><Arrow /><Ui>Developer mode</Ui><Arrow />בוחרים את <b>תוכנית עבודה</b>. לפני כל עריכה ChatGPT יבקש ממך אישור.</S>
-            <Note>נדרשת תוכנית בתשלום (Plus / Pro / Business / Enterprise / Edu). ב-Business / Enterprise ייתכן שמנהל סביבת העבודה צריך לאפשר Developer mode. ייתכן ששמות התפריטים יהיו מעט שונים.</Note>
+            <S n={1}>ב-ChatGPT, בסרגל הצד, לוחצים על הכפתור <Ui>Plugins</Ui> (פלאגאין).</S>
+            <S n={2}>בפינה הימנית העליונה לוחצים <Ui>Add</Ui> ובוחרים <Ui>Add custom MCP server</Ui>.</S>
+            <S n={3}>בוחרים שם (למשל <b>תוכנית עבודה</b>) ומדביקים את הכתובת {UrlBox}.</S>
+            <S n={4}>נפתח מסך התחברות של המערכת: מתחברים למשתמש שלך, בוחרים <b>קריאה בלבד</b> או <b>קריאה ועריכה</b>, ולוחצים <b>אישור וחיבור</b> כדי לתת ל-ChatGPT הרשאה.</S>
+            <S n={5}>מעכשיו פשוט כותבים בצ׳אט מה צריך. לפני כל עריכה ChatGPT יבקש ממך אישור.</S>
+            <Note>ייתכן ששמות התפריטים יהיו מעט שונים.</Note>
           </>}
           {tool === "claude-code" && <>
             <S n={1}>בטרמינל מריצים (פעם אחת):<pre dir="ltr" className="mt-1 overflow-x-auto rounded-md bg-ink-50 p-2 text-left font-mono text-[12px]">claude mcp add --transport http workplan {url}</pre></S>

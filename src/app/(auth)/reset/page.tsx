@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api, ApiErr } from "@/lib/api";
 import { AuthShell, FormError } from "@/components/AuthShell";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 function ResetForm() {
   const token = useSearchParams().get("token") ?? "";
   const [p1, setP1] = useState(""); const [p2, setP2] = useState("");
+  const [show, setShow] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   async function submit(e: React.FormEvent) {
@@ -24,8 +26,9 @@ function ResetForm() {
   return (
     <form onSubmit={submit} className="space-y-3.5">
       <FormError msg={err} />
-      <div><label className="label">סיסמה חדשה</label><input className="input h-10" dir="ltr" type="password" minLength={8} required value={p1} onChange={(e) => setP1(e.target.value)} /></div>
-      <div><label className="label">אימות סיסמה</label><input className="input h-10" dir="ltr" type="password" minLength={8} required value={p2} onChange={(e) => setP2(e.target.value)} /></div>
+      <div><label className="label" htmlFor="reset-p1">סיסמה חדשה</label><PasswordInput id="reset-p1" value={p1} onChange={setP1} show={show} onToggle={() => setShow((x) => !x)} /></div>
+      <div><label className="label" htmlFor="reset-p2">אימות סיסמה</label>
+        <PasswordInput id="reset-p2" value={p2} onChange={setP2} show={show} onToggle={() => setShow((x) => !x)} status={p2 ? (p1 === p2 ? "match" : "mismatch") : undefined} /></div>
       <button className="btn-primary h-10 w-full">עדכון סיסמה</button>
     </form>
   );

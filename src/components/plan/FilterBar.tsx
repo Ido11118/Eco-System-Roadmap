@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
   Search, ChevronRight, ChevronLeft, SlidersHorizontal, Bookmark, Check, Star, Trash2, Pencil, X, RotateCcw,
-  RectangleHorizontal, Diamond, Flag,
+  RectangleHorizontal, Diamond, Flag, ChevronDown,
 } from "lucide-react";
 import type { PlanData, TimeFilter, ViewConfig } from "@/lib/types";
 import { useCatalog } from "@/components/CatalogProvider";
@@ -17,7 +17,8 @@ import { useConfirm, Dialog } from "@/components/ui/dialog";
 import { useIsMobile } from "@/components/ui/useMobile";
 import { shiftTime, timeLabel, defaultViewConfig, CROSS_FILTER } from "./filters";
 import { CROSS_ROW_LABELS } from "@/lib/constants";
-import { sanitizeView, TEXT_SIZES, useTextSize, useBarFontSize, BAR_FONT } from "./prefs";
+import { sanitizeView, TEXT_SIZES, useTextSize, useBarFontSize, BAR_FONT, useGanttSize, GANTT_SIZE, currentDisplay, applyDisplay } from "./prefs";
+import { densityGeometry } from "@/components/gantt/geometry";
 import { useMe } from "./ui";
 import { depsOf } from "@/lib/deps";
 
@@ -271,6 +272,11 @@ function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v
   const me = useMe();
   const [textSize, setTextSize] = useTextSize(me?.preferences ?? {});
   const [barFont, setBarFont] = useBarFontSize(me?.preferences ?? {});
+  const [gSize, setGSize] = useGanttSize(me?.preferences ?? {});
+  const [advanced, setAdvanced] = useState(false);
+  const base = densityGeometry(view.density);
+  const weekW = gSize.weekW ?? base.weekW, rowH = gSize.rowH ?? base.rowH;
+  const custom = gSize.weekW !== undefined || gSize.rowH !== undefined;
   const Seg = <T extends string>({ value, options, onChange, testid }: { value: T; options: { key: T; label: string }[]; onChange: (v: T) => void; testid: string }) => (
     <div className="flex gap-1" data-testid={testid}>
       {options.map((o) => (
@@ -292,28 +298,64 @@ function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v
           </div>
           {mode !== "table" && (
             <div>
-              <div className="label flex items-center justify-between">
-                <span>גודל הטקסט בקוביות</span>
-                <span className="tabular-nums text-ink-700" data-testid="bar-font-value">{barFont}px</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-ink-400">א</span>
-                <input type="range" min={BAR_FONT.min} max={BAR_FONT.max} step={1} value={barFont} className="flex-1 accent-brand-600"
-                  onChange={(e) => setBarFont(Number(e.target.value))} aria-label="גודל הטקסט בקוביות" data-testid="bar-font" />
-                <span className="text-[15px] text-ink-400">א</span>
-              </div>
+              <div className="label">צפיפות הגאנט (רוחב שבוע וגובה שורה)</div>
+              {/* בחירת צפיפות מחזירה את הרוחב והגובה לערכים שלה (מבטלת התאמה ידנית) */}
+              <Seg value={custom ? ("custom" as ViewConfig["density"]) : view.density} onChange={(d) => { setGSize({}); setView({ ...view, density: d }); }} testid="density"
+                options={[{ key: "compact", label: "צפופה" }, { key: "normal", label: "רגילה" }, { key: "wide", label: "מרווחת" }]} />
+              {custom && <div className="mt-1 text-[11px] text-ink-400">מוגדר ידנית בהגדרות המתקדמות</div>}
             </div>
           )}
           {mode !== "table" && (
-            <div>
-              <div className="label">צפיפות הגאנט (רוחב שבוע וגובה שורה)</div>
-              <Seg value={view.density} onChange={(d) => setView({ ...view, density: d })} testid="density"
-                options={[{ key: "compact", label: "צפופה" }, { key: "normal", label: "רגילה" }, { key: "wide", label: "מרווחת" }]} />
+            <div className="border-t border-ink-100 pt-2">
+              <button className="flex w-full items-center justify-between text-[12.5px] font-medium text-ink-700 hover:text-ink-900" onClick={() => setAdvanced((a) => !a)}
+                aria-expanded={advanced} data-testid="advanced-display">
+                הגדרות תצוגה מתקדמות <ChevronDown size={14} className={clsx("text-ink-400 transition", advanced && "rotate-180")} />
+              </button>
+              {advanced && (
+                <div className="mt-2.5 space-y-3" data-testid="advanced-display-panel">
+                  <SizeControl label="רוחב עמודה (שבוע)" unit="px" value={weekW} min={GANTT_SIZE.weekW.min} max={GANTT_SIZE.weekW.max}
+                    onChange={(n) => setGSize({ ...gSize, weekW: n })} testid="week-width" />
+                  <SizeControl label="גובה שורה" unit="px" value={rowH} min={GANTT_SIZE.rowH.min} max={GANTT_SIZE.rowH.max}
+                    onChange={(n) => setGSize({ ...gSize, rowH: n })} testid="row-height" />
+                  <SizeControl label="גודל המלל בקוביות" unit="px" value={barFont} min={BAR_FONT.min} max={BAR_FONT.max}
+                    onChange={setBarFont} testid="bar-font" />
+                  <p className="text-[11px] leading-snug text-ink-400">כשגובה השורה מספיק לשתי שורות טקסט, שם ארוך ממשיך לשורה השנייה במקום להיחתך.</p>
+                  {(custom || barFont !== BAR_FONT.def) && (
+                    <button className="text-[12px] text-brand-600 hover:underline" onClick={() => { setGSize({}); setBarFont(BAR_FONT.def); }} data-testid="advanced-reset">איפוס לברירת המחדל</button>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
       </Floating>
     </>
+  );
+}
+
+/** משתנה תצוגה: פס גרירה + מספר ידני (נשמר ביציאה מהשדה / Enter, נחתך לטווח המותר) */
+function SizeControl({ label, unit, value, min, max, onChange, testid }: { label: string; unit: string; value: number; min: number; max: number; onChange: (n: number) => void; testid: string }) {
+  const [text, setText] = useState<string | null>(null);
+  const commit = () => {
+    if (text === null) return;
+    const n = Math.round(Number(text));
+    if (Number.isFinite(n) && text.trim() !== "") onChange(Math.max(min, Math.min(max, n)));
+    setText(null);
+  };
+  return (
+    <div>
+      <div className="label flex items-center justify-between">
+        <span>{label}</span>
+        <span className="flex items-center gap-1 text-ink-500">
+          <input type="number" inputMode="numeric" min={min} max={max} className="input h-6 w-14 px-1 text-center text-[12px] tabular-nums"
+            value={text ?? String(value)} onChange={(e) => setText(e.target.value)} onBlur={commit}
+            onKeyDown={(e) => { if (e.key === "Enter") commit(); }} aria-label={`${label} (${unit})`} data-testid={`${testid}-input`} />
+          <span className="text-[11px]" data-testid={`${testid}-value`}>{value}{unit}</span>
+        </span>
+      </div>
+      <input type="range" min={min} max={max} step={1} value={value} className="w-full accent-brand-600"
+        onChange={(e) => onChange(Number(e.target.value))} aria-label={label} data-testid={testid} />
+    </div>
   );
 }
 
@@ -330,7 +372,7 @@ function SavedViews({ view, setView, data }: { view: ViewConfig; setView: (v: Vi
   const refresh = () => qc.invalidateQueries({ queryKey: ["views"] });
   const save = async () => {
     if (!newName.trim()) return;
-    try { await api("POST", "/api/views", { name: newName.trim(), config: view }); setNewName(""); refresh(); toast.show("success", "התצוגה נשמרה"); }
+    try { await api("POST", "/api/views", { name: newName.trim(), config: { ...view, display: currentDisplay() } }); setNewName(""); refresh(); toast.show("success", "התצוגה נשמרה (מסננים ואפשרויות תצוגה)"); }
     catch (e) { toast.show("error", (e as Error).message); }
   };
   return (
@@ -349,7 +391,7 @@ function SavedViews({ view, setView, data }: { view: ViewConfig; setView: (v: Vi
                       if (e.key === "Escape") setRenaming(null);
                     }} />
                 ) : (
-                  <button className="flex flex-1 items-center gap-1.5 truncate py-1.5 text-start" onClick={() => { setView(sanitizeView(v.config, view, data)); setOpen(false); toast.show("info", `נטענה התצוגה "${v.name}"`); }}>
+                  <button className="flex flex-1 items-center gap-1.5 truncate py-1.5 text-start" onClick={() => { applyDisplay(v.config.display); setView(sanitizeView(v.config, view, data)); setOpen(false); toast.show("info", `נטענה התצוגה "${v.name}"`); }}>
                     {v.isDefault && <Star size={12} className="shrink-0 fill-amber-400 text-amber-400" />}
                     <span className="truncate">{v.name}</span>
                   </button>
@@ -369,7 +411,7 @@ function SavedViews({ view, setView, data }: { view: ViewConfig; setView: (v: Vi
                 onKeyDown={(e) => { if (e.key === "Enter") void save(); }} data-testid="view-name" />
               <button className="btn-primary btn-sm" onClick={() => void save()} disabled={!newName.trim()}><Check size={13} /></button>
             </div>
-            <p className="mt-1.5 text-[11px] text-ink-400">כוללת מסננים, טווח זמן ואפשרויות תצוגה. התצוגות אישיות.</p>
+            <p className="mt-1.5 text-[11px] text-ink-400">נשמרים המסננים, טווח הזמן, השכבות ואפשרויות התצוגה (גודל תצוגה, צפיפות, רוחב עמודה, גובה שורה וגודל המלל). התצוגות אישיות.</p>
           </div>
         </div>
       </Floating>

@@ -9,9 +9,9 @@ export function PasswordInput({ id, value, onChange, show, onToggle, status, aut
 }) {
   return (
     <div className="relative">
-      <input id={id} className={clsx("input h-10 pl-16", status === "match" && "border-green-500", status === "mismatch" && "border-red-400")}
+      <input id={id} className={clsx("input h-10 pr-16", status === "match" && "border-green-500", status === "mismatch" && "border-red-400")}
         dir="ltr" type={show ? "text" : "password"} minLength={minLength} required autoComplete={autoComplete} value={value} onChange={(e) => onChange(e.target.value)} />
-      <div className="absolute inset-y-0 left-1.5 flex items-center gap-1">
+      <div className="absolute inset-y-0 right-1.5 flex items-center gap-1">
         {status === "match" && <CircleCheck size={16} className="text-green-600" aria-label="הסיסמאות תואמות" data-testid={`${id}-match`} />}
         <button type="button" className="icon-btn h-7 w-7" onClick={onToggle} aria-label={show ? "הסתרת הסיסמה" : "הצגת הסיסמה"} title={show ? "הסתרת הסיסמה" : "הצגת הסיסמה"} data-testid={`${id}-eye`}>
           {show ? <EyeOff size={15} /> : <Eye size={15} />}

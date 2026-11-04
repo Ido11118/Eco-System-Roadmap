@@ -106,6 +106,13 @@ export const viewConfigSchema = z.object({
   showSprints: z.boolean().default(false),
   density: z.enum(["compact", "normal", "wide"]).default("normal"),
   mode: z.enum(["gantt", "table"]).optional(),
+  // אפשרויות תצוגה שנשמרו עם תצוגה שמורה (אותם גבולות כמו בהעדפות האישיות)
+  display: z.object({
+    textSize: z.enum(["sm", "md", "lg", "xl"]).optional(),
+    barFontSize: z.number().int().min(9).max(20).optional(),
+    ganttSize: z.object({ weekW: z.number().int().min(20).max(120).optional(), rowH: z.number().int().min(22).max(72).optional() }).strict().optional(),
+    ganttCols: z.object({ domain: z.number().int().min(60).max(320), team: z.number().int().min(80).max(400) }).optional(),
+  }).strict().optional(),
 });
 
 export const savedViewSchema = z.object({
@@ -126,7 +133,8 @@ export const preferencesSchema = z.object({
   tableCollapsed: z.array(z.number().int()).max(500).optional(),
   viewOnly: z.boolean().optional(),
   ganttCols: z.object({ domain: z.number().int().min(60).max(320), team: z.number().int().min(80).max(400) }).optional(),
-  barFontSize: z.number().int().min(9).max(16).optional(),
+  barFontSize: z.number().int().min(9).max(20).optional(),
+  ganttSize: z.object({ weekW: z.number().int().min(20).max(120).optional(), rowH: z.number().int().min(22).max(72).optional() }).strict().optional(),
 }).strict();
 
 export const adminUserActionSchema = z.discriminatedUnion("action", [

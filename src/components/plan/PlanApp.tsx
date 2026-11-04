@@ -20,7 +20,7 @@ import { useLivePlan, readOnlyStore, viewOnlyStore, type PlanStore } from "./sto
 import { WorkspaceUIProvider, useWorkspaceUI } from "./ui";
 import { FilterBar, type SavedView } from "./FilterBar";
 import { defaultViewConfig, permissionDefaultDomains, revealFor, type Revealable } from "./filters";
-import { currentPrefs, sanitizeView, savePrefs, useViewOnly } from "./prefs";
+import { currentPrefs, sanitizeView, applyDisplay, savePrefs, useViewOnly } from "./prefs";
 import { locateItem } from "./locate";
 import { DeletedItemsButton } from "./DeletedItems";
 import { BacklogView } from "@/components/backlog/BacklogView";
@@ -137,7 +137,7 @@ export function PlanApp({ me }: { me: Me }) {
     if (appliedDefault.current || !viewsQ.data) return;
     appliedDefault.current = true;
     const d = viewsQ.data.find((v) => v.isDefault); // תצוגת ברירת מחדל שהמשתמש בחר גוברת על המצב האחרון
-    if (d) setViewState((cur) => sanitizeView(d.config, cur, live.data));
+    if (d) { applyDisplay(d.config.display); setViewState((cur) => sanitizeView(d.config, cur, live.data)); }
   }, [viewsQ.data, live.data]);
   const prefTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setView = useCallback((v: ViewConfig) => {
@@ -305,7 +305,7 @@ export function PlanApp({ me }: { me: Me }) {
           )}
         </main>
         {mode !== "table" && mode !== "backlog" && <Legend readOnly={store.readOnly || mode === "compare"} />}
-        {mode !== "compare" && mode !== "backlog" && !snapId && <AddFab store={workStore} />}
+        {mode !== "compare" && mode !== "backlog" && !snapId && <AddFab store={workStore} viewOnly={viewOnly} />}
       </AppShell>
     </WorkspaceUIProvider>
   );
@@ -410,8 +410,9 @@ function CompareSidesSelect({ snapshots, a, b, onChange }: {
 }
 
 /** כפתור הוספה צף (למטה משמאל): "+" שנפתח לתכולה / אבן דרך / ספרינט. הצבעים תואמים לצבעי השכבות בגאנט. */
-function AddFab({ store }: { store: PlanStore }) {
+function AddFab({ store, viewOnly }: { store: PlanStore; viewOnly: boolean }) {
   const ui = useWorkspaceUI();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -428,6 +429,15 @@ function AddFab({ store }: { store: PlanStore }) {
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("mousedown", onDown); window.removeEventListener("keydown", onKey); };
   }, [open]);
+  // מצב צפייה בלבד: הכפתור נשאר במקום, נעול — ולחיצה מסבירה איך חוזרים לעריכה
+  if (data && viewOnly) return (
+    <button aria-label="הוספה (נעול במצב צפייה)" title="אתה במצב צפייה — עבור למצב עריכה כדי להוסיף תכולות" data-testid="add-fab-locked"
+      onClick={() => toast.show("info", "אתה במצב צפייה. עבור למצב עריכה כדי להוסיף תכולות")}
+      className="fixed bottom-14 left-5 z-[60] flex h-12 w-12 cursor-not-allowed items-center justify-center rounded-full bg-ink-300 text-white shadow-pop">
+      <Plus size={22} />
+      <span className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-ink-600 ring-2 ring-white"><Lock size={11} /></span>
+    </button>
+  );
   if (!data || !canAny) return null;
   const enter = () => { if (closeTimer.current) clearTimeout(closeTimer.current); if (!open) openedAt.current = Date.now(); setOpen(true); };
   const leave = () => { closeTimer.current = setTimeout(() => setOpen(false), 350); };

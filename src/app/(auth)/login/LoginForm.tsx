@@ -3,10 +3,12 @@ import { useState } from "react";
 import Link from "next/link";
 import { api, ApiErr } from "@/lib/api";
 import { FormError } from "@/components/AuthShell";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 
 export function LoginForm({ next, google, initialError }: { next: string | null; google: boolean; initialError: string | null }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [show, setShow] = useState(false);
   const [err, setErr] = useState<string | null>(initialError);
   const [busy, setBusy] = useState(false);
   async function submit(e: React.FormEvent) {
@@ -38,7 +40,8 @@ export function LoginForm({ next, google, initialError }: { next: string | null;
           <label className="label" htmlFor="password">סיסמה</label>
           <Link href="/forgot" className="mb-1 text-[12px] text-brand-600 hover:underline">שכחתי סיסמה</Link>
         </div>
-        <input id="password" className="input h-10" type="password" dir="ltr" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+        {/* עין להצגת הסיסמה שהוקלדה. בלי דרישת אורך מינימלי בהתחברות — הבדיקה בשרת */}
+        <PasswordInput id="password" value={password} onChange={setPassword} show={show} onToggle={() => setShow((x) => !x)} autoComplete="current-password" minLength={1} />
       </div>
       <button className="btn-primary h-10 w-full" disabled={busy}>{busy ? "מתחבר…" : "התחברות"}</button>
       <p className="pt-1 text-center text-[13px] text-ink-500">

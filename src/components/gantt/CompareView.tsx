@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/toast";
 import { LabelMenu } from "./GanttView";
 import type { PlanData, ViewConfig } from "@/lib/types";
 import { useCatalog } from "@/components/CatalogProvider";
-import { useBarFontSize } from "@/components/plan/prefs";
+import { useBarFontSize, useGanttSize } from "@/components/plan/prefs";
 import {
   buildCompareLayout, summarize, datesChanged, COMPARE_FILTERS, TAG_LABELS, type CompareUnit,
 } from "@/lib/compare";
@@ -19,7 +19,7 @@ import { useTooltip } from "@/components/ui/tooltip";
 import { useWorkspaceUI } from "@/components/plan/ui";
 import { crossRowVisible, itemMatches, timeWindow, visibleTeamIds } from "@/components/plan/filters";
 import { GanttGrid, useCurrentWeek, type CrossGroup, type GanttGridHandle, type LaneSpec } from "./GanttGrid";
-import { geometry } from "./geometry";
+import { geometry, fitsTwoLines } from "./geometry";
 
 export type CompareHandle = { goToday: () => void };
 
@@ -34,7 +34,9 @@ export const CompareView = memo(forwardRef<CompareHandle, {
   const cat = useCatalog();
   const [barFont] = useBarFontSize(ui.me.preferences);
   const gridRef = useRef<GanttGridHandle>(null);
-  const { weekW, rowH, crossLaneH } = geometry(view.density, true, useIsMobile());
+  const [gSize] = useGanttSize(ui.me.preferences);
+  const mobile = useIsMobile();
+  const { weekW, rowH, crossLaneH } = geometry(view.density, true, mobile, gSize);
   const merged = useMemo<PlanData>(() => ({ ...current, items: [...current.items, ...baseline.items] }), [current, baseline]);
   const [w0, w1] = timeWindow(view.time, merged);
   const timeline = useMemo(() => buildTimeline(w0, w1), [w0, w1]);
@@ -165,9 +167,9 @@ export const CompareView = memo(forwardRef<CompareHandle, {
             <div {...events} data-actual={u.id}
               className="gantt-bar absolute z-[11] flex cursor-pointer items-center overflow-clip rounded-[5px] border text-[12px] font-medium"
               style={{ right: ab.right + (changed ? 2 : 0), width: ab.width - (changed ? 4 : 0), top: changed ? 6 : 3, height: changed ? h - 12 : h - 6, background: m.bg, color: m.fg, borderColor: m.border, fontSize: barFont }}>
-              <span className="sticky flex min-w-0 items-center gap-1 px-1" style={{ right: "var(--labels-w)" }}>
+              <span className="sticky flex min-w-0 max-w-full items-center gap-1 px-1" style={{ right: "var(--labels-w)" }}>
                 {added && <span className="shrink-0 rounded bg-brand-600 px-1 text-[9.5px] font-bold text-white">חדש</span>}
-                <span className="truncate">{u.name}</span>
+                <span className={fitsTwoLines(changed ? h - 12 : h - 6, barFont) ? "line-clamp-2 whitespace-normal break-words leading-[1.2]" : "truncate"}>{u.name}</span>
               </span>
             </div>
           )}
@@ -183,7 +185,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
         <GanttGrid ref={gridRef} timeline={timeline} weekW={weekW} domains={structure.domains}
           teams={structure.teams.filter((t) => teamsVisible.has(t.id))}
           teamLanes={teamLanes} crossGroups={crossGroups} todayIndex={todayIndex}
-          renderLane={(lane) => renderLane(lane)} teamEditable={() => false} readOnlyHints={false}
+          renderLane={(lane) => renderLane(lane)} teamEditable={() => false} readOnlyHints={false} panMode={!mobile}
           onLabelContextMenu={setView ? (e, domainId, teamId) => setMenu({ x: e.clientX, y: e.clientY, label: { domainId, teamId } }) : undefined}
           emptyText="אין תכולות להצגה לפי הסינון הנוכחי" />
       </div>

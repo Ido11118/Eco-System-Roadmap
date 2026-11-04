@@ -3,7 +3,7 @@
 // והשמירה בשרת היא מיזוג אטומי של השדות שהשתנו בלבד.
 import { api } from "@/lib/api";
 import { useEffect, useState } from "react";
-import type { UserPreferences, ViewConfig, PlanData, TextSize } from "@/lib/types";
+import type { UserPreferences, ViewConfig, ViewDisplay, PlanData, TextSize } from "@/lib/types";
 import { CROSS_FILTER_IDS, defaultViewConfig } from "./filters";
 
 let cache: UserPreferences | null = null;
@@ -38,7 +38,7 @@ export function uiZoom(): number {
   return typeof window === "undefined" ? 1 : zoomOf(cache?.textSize);
 }
 /** גודל הטקסט בתוך קוביות הגאנט — נשמר אישית ומתעדכן מיד בכל המסכים */
-export const BAR_FONT = { min: 9, max: 16, def: 12 };
+export const BAR_FONT = { min: 9, max: 20, def: 12 };
 export function useBarFontSize(initial: UserPreferences): [number, (n: number) => void] {
   const [v, setV] = useState<number>(() => currentPrefs(initial).barFontSize ?? BAR_FONT.def);
   useEffect(() => {
@@ -47,6 +47,19 @@ export function useBarFontSize(initial: UserPreferences): [number, (n: number) =
     return () => { listeners.delete(l); };
   }, []);
   return [v, (n) => savePrefs({ barFontSize: n })];
+}
+
+/** הגדרות תצוגה מתקדמות: רוחב עמודת שבוע וגובה שורה בגאנט. ערך חסר = לפי הצפיפות (צפופה/רגילה/מרווחת) */
+export const GANTT_SIZE = { weekW: { min: 20, max: 120 }, rowH: { min: 22, max: 72 } };
+export type GanttSize = { weekW?: number; rowH?: number };
+export function useGanttSize(initial: UserPreferences): [GanttSize, (s: GanttSize) => void] {
+  const [v, setV] = useState<GanttSize>(() => currentPrefs(initial).ganttSize ?? {});
+  useEffect(() => {
+    const l = () => setV(cache?.ganttSize ?? {});
+    listeners.add(l);
+    return () => { listeners.delete(l); };
+  }, []);
+  return [v, (s) => savePrefs({ ganttSize: s })];
 }
 
 /** רוחב עמודות "תחום" ו"צוות" בגאנט — כל משתמש מרחיב אצלו בלבד (גרירת הגבול בכותרת) */
@@ -85,12 +98,32 @@ export function useTextSize(initial: UserPreferences): [TextSize, (t: TextSize) 
   return [v, (t) => savePrefs({ textSize: t })];
 }
 
+/** אפשרויות התצוגה הנוכחיות — נשמרות יחד עם תצוגה שמורה */
+export function currentDisplay(): ViewDisplay {
+  const p = cache ?? {};
+  return {
+    textSize: p.textSize ?? "md", barFontSize: p.barFontSize ?? BAR_FONT.def, ganttSize: p.ganttSize ?? {},
+    ganttCols: colsOf(p),
+  };
+}
+/** טעינת תצוגה שמורה: מחילים את אפשרויות התצוגה שנשמרו איתה (תצוגות ישנות בלי display — לא משנות דבר) */
+export function applyDisplay(d: ViewDisplay | undefined) {
+  if (!d) return;
+  const patch: Partial<UserPreferences> = {};
+  if (d.textSize) patch.textSize = d.textSize;
+  if (d.barFontSize) patch.barFontSize = d.barFontSize;
+  if (d.ganttSize) patch.ganttSize = d.ganttSize;
+  if (d.ganttCols) patch.ganttCols = d.ganttCols;
+  if (Object.keys(patch).length) savePrefs(patch);
+}
+
 /** טעינת תצוגה שמורה בבטחה: השלמת שדות חסרים מהמצב הנוכחי וסינון מזהים שכבר לא קיימים */
 export function sanitizeView(cfg: Partial<ViewConfig>, current: ViewConfig, data?: PlanData): ViewConfig {
+  const { display: _display, ...filters } = cfg; // אפשרויות התצוגה מוחלות בנפרד (applyDisplay) — לא נשמרות כחלק מהסינון
   const v: ViewConfig = {
     ...defaultViewConfig(),
     showMilestones: current.showMilestones, showSprints: current.showSprints, density: current.density,
-    ...cfg,
+    ...filters,
   };
   // תצוגות שנשמרו לפני שהשורות הרוחביות נכנסו לסינון התחומים: מי שסינן תחומים המשיך לראות אותן — שומרים על כך
   if (cfg.v !== 2 && v.domainIds?.length) v.domainIds = [...v.domainIds, ...CROSS_FILTER_IDS];
