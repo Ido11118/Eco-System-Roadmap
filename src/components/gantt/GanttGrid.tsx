@@ -54,6 +54,7 @@ type Props = {
   emptyText?: React.ReactNode;
   /** הצגת סימון "צפייה בלבד" לצוותים ללא הרשאה (לא רלוונטי במצב השוואה) */
   readOnlyHints?: boolean;
+  leadingDomainId?: number;
   /** צפייה בלבד: גרירה בעכבר מזיזה את התצוגה (סמן "יד") — כמו גרירת מפה */
   panMode?: boolean;
 };
@@ -229,12 +230,12 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
         </div>
 
         {/* ---------------- גוף ---------------- */}
-        <div className="relative" data-testid="gantt-body">
+        <div className={clsx("relative", p.leadingDomainId !== undefined && "flex flex-col")} data-testid="gantt-body">
           {/* שורות רוחביות: גורמים משפיעים, מופעים רוחביים — בראש הגוף, נגללות עם התוכן (רק שנה/חודש/שבוע קבועים) */}
           {p.crossGroups.map((g) => {
             const h = g.lanes.reduce((s, l) => s + l.height, 0);
             return (
-              <div key={g.kind} className="flex border-b border-ink-200" data-cross={g.kind}
+              <div key={g.kind} className="flex border-b border-ink-200" data-cross={g.kind} style={{ order: 1 }}
                 onContextMenu={p.onLabelContextMenu ? (e) => { if (!(e.target as HTMLElement).closest(".gantt-timeline")) { e.preventDefault(); p.onLabelContextMenu!(e, g.kind === "INFLUENCE" ? -1 : -2, null); } } : undefined}>
                 <div className="sticky right-0 z-[28] flex shrink-0 items-center gap-1 border-l border-ink-200 bg-[#fbfcfe] px-2 text-[12px] font-semibold text-ink-700"
                   style={{ width: labelW, height: h }}>
@@ -259,7 +260,7 @@ export const GanttGrid = memo(forwardRef<GanttGridHandle, Props>(function GanttG
           {blocks.map(({ d, teams }) => {
             const merged = d.isSingleTeam && teams.length === 1;
             return (
-              <div key={d.id} className="relative flex border-b-2 border-ink-300" data-domain={d.id}>
+              <div key={d.id} className="relative flex border-b-2 border-ink-300" data-domain={d.id} style={{ order: d.id === p.leadingDomainId ? 0 : 2 }}>
                 {!merged && (
                   <div className="sticky right-0 z-[28] shrink-0 border-l border-ink-200 bg-white" style={{ width: domainW }} data-domain-label={d.id}
                     onContextMenu={p.onLabelContextMenu ? (e) => { e.preventDefault(); p.onLabelContextMenu!(e, d.id, null); } : undefined}>

@@ -25,6 +25,7 @@ import { CROSS_FILTER, crossRowVisible, hasContentFilter, hideDomain, hideTeam, 
 import { useToast } from "@/components/ui/toast";
 import { GanttGrid, useCurrentWeek, type CrossGroup, type GanttGridHandle, type LaneSpec } from "./GanttGrid";
 import { geometry, fitsTwoLines } from "./geometry";
+import { PRIVATE_DOMAIN } from "@/lib/privateWorkspace";
 import { batchOverlap, shiftedEntries } from "@/lib/itemBatch";
 import { SelectionBar, ItemActionsMenu } from "@/components/plan/ItemSelection";
 import { DepBadge, DepList } from "@/components/plan/Dependencies";
@@ -353,7 +354,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
   const itemTip = (i: ItemDTO) => (
     <div className="space-y-0.5">
       <div className="font-semibold">{i.name}</div>
-      <div className="opacity-80">ID {i.id} · {cat.status(i.status).label}{i.priority !== cat.defaultPriority ? ` · תיעדוף ${cat.priority(i.priority).label}` : ""}</div>
+      <div className="opacity-80">{ui.personalGantt && i.id < 0 ? "תכולה פרטית" : `ID ${i.id}`} · {cat.status(i.status).label}{i.priority !== cat.defaultPriority ? ` · תיעדוף ${cat.priority(i.priority).label}` : ""}</div>
       <div className="opacity-80">שבועות {weekNumber(i.startWeek)}–{weekNumber(i.endWeek)} · {fmtDate(i.startWeek)}–{fmtDate(weekEndOf(i.endWeek))}</div>
       {i.notes && <div className="max-w-[300px] truncate opacity-70">{i.notes}</div>}
       <DepList item={i} />
@@ -365,7 +366,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     const box = barBox(opts?.start ?? i.startWeek, opts?.end ?? i.endWeek);
     if (!box) return null;
     const m = cat.status(i.status);
-    const dim = (filtering && !matches(i)) || (ui.personalGantt?.showSource && !ui.personalGantt.ids.includes(i.id));
+    const dim = (filtering && !matches(i)) || (ui.personalGantt?.showSource && i.id > 0 && !ui.personalGantt.ids.includes(i.id));
     const isDragged = drag?.started && drag.items.some((x) => x.id === i.id) && !opts?.ghost;
     const selected = ui.selectedItems.has(i.id) || ui.selectedItemId === i.id;
     const twoLines = fitsTwoLines(height - 6, barFont);
@@ -603,6 +604,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         renderLane={renderLane} renderTeamOverlay={renderTeamOverlay} renderTeamMarkers={renderTeamMarkers} renderBodyOverlay={renderBodyOverlay}
         renderDomainOverlay={renderDomainOverlay} renderRowControl={renderRowControl} teamLabelExtra={teamLabelExtra}
         teamEditable={(t) => store.canEditTeam(t)}
+        leadingDomainId={ui.personalGantt ? PRIVATE_DOMAIN : undefined}
         readOnlyHints={ui.personalGantt ? false : undefined}
         // בטלפון אין סימון טווח (הקשה תמימה בזמן גלילה הייתה פותחת חלון הוספה) — מוסיפים מכפתור ה-+
         onLaneMouseDown={store.readOnly || mobile ? undefined : onLaneMouseDown} onLaneContextMenu={onLaneContextMenu}
@@ -638,7 +640,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
       <Floating open={!!pick?.menu} point={pick?.menu} onClose={() => setPick((p) => (p ? { ...p, menu: undefined } : p))}>
         {pick?.menu && (() => {
           const teamDomain = pick.teamId !== null ? data.teams.find((t) => t.id === pick.teamId)?.domainId : undefined;
-          const canMs = pick.teamId === null ? store.canEditCross() : store.canEditTeam(pick.teamId);
+          const canMs = !ui.personalGantt && (pick.teamId === null ? store.canEditCross() : store.canEditTeam(pick.teamId));
           const canSprint = teamDomain !== undefined && store.canEditDomain(teamDomain);
           const range = pick.start === pick.end ? `שבוע ${weekNumber(pick.start)}` : `שבועות ${weekNumber(pick.start)}–${weekNumber(pick.end)}`;
           const go = (fn: () => void) => { setPick(null); fn(); };
@@ -837,6 +839,7 @@ export function dragRange(item: ItemDTO, mode: DragState["mode"], d: number): { 
 function ItemSummary({ item, data, point, editable, onClose, onOpen }: {
   item: ItemDTO; data: PlanData; point: { x: number; y: number }; editable: boolean; onClose: () => void; onOpen: () => void;
 }) {
+  const ui = useWorkspaceUI();
   const cat = useCatalog();
   const m = cat.status(item.status);
   return (
@@ -848,7 +851,7 @@ function ItemSummary({ item, data, point, editable, onClose, onOpen }: {
           <div className="font-semibold leading-snug text-ink-900">{item.name}</div>
         </div>
         <div className="space-y-0.5 text-ink-600">
-          <div>ID {item.id} · {m.label}{item.priority !== cat.defaultPriority ? ` · תיעדוף ${cat.priority(item.priority).label}` : ""}</div>
+          <div>{ui.personalGantt && item.id < 0 ? "תכולה פרטית" : `ID ${item.id}`} · {m.label}{item.priority !== cat.defaultPriority ? ` · תיעדוף ${cat.priority(item.priority).label}` : ""}</div>
           <div className="tabular-nums">שבועות {weekNumber(item.startWeek)}–{weekNumber(item.endWeek)} · {fmtDate(item.startWeek)}–{fmtDate(weekEndOf(item.endWeek))}</div>
           {item.notes && <div className="line-clamp-3 whitespace-pre-line text-ink-500">{item.notes}</div>}
           <div className="text-amber-900"><DepList item={item} max={3} /></div>

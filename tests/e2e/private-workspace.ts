@@ -1,0 +1,120 @@
+// Isolated database only. BASE_URL=http://localhost:3004 CHROME_PATH=/usr/bin/chromium node --env-file=.env --import tsx tests/e2e/private-workspace.ts
+import assert from "node:assert/strict";
+import { chromium, request, type APIRequestContext } from "playwright";
+import type { ItemDTO, PlanData, RowDTO } from "../../src/lib/types";
+import { PRIVATE_DOMAIN, PRIVATE_TEAM, type PrivatePlan } from "../../src/lib/privateWorkspace";
+import { addWeeks, currentWeekIL } from "../../src/lib/weeks";
+
+async function main() {
+  const baseURL = process.env.BASE_URL ?? "http://localhost:3004";
+  const endpoint = "/api/admin/personal-gantt/workspace";
+  const tag = `omar-${Date.now()}`;
+  const admin = await request.newContext({ baseURL, extraHTTPHeaders: { Origin: baseURL } });
+  const regular = await request.newContext({ baseURL, extraHTTPHeaders: { Origin: baseURL } });
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  let publicRow: number | undefined;
+  const privateIds = new Set<number>();
+  async function json<T>(c: APIRequestContext, method: string, url: string, data?: unknown): Promise<T> {
+    const r = await c.fetch(url, { method, data }); assert(r.ok(), `${method} ${url}: ${r.status()} ${await r.text()}`); return r.json();
+  }
+  const get = () => json<PrivatePlan>(admin, "GET", endpoint);
+  const send = (data: object) => json<{ plan: PrivatePlan; result: { items?: ItemDTO[]; row?: RowDTO } }>(admin, "POST", endpoint, data);
+  const source = () => json<PlanData>(admin, "GET", "/api/plan");
+  try {
+    assert.equal((await regular.get(endpoint)).status(), 401);
+    await json(admin, "POST", "/api/auth/login", { email: process.env.SUPERUSER_EMAIL, password: process.env.SUPERUSER_PASSWORD });
+    const initial = await source(); const team = initial.teams[0];
+    publicRow = (await json<RowDTO>(admin, "POST", "/api/rows", { teamId: team.id })).id;
+    const week = currentWeekIL();
+    const publicItem = await json<ItemDTO>(admin, "POST", "/api/items", { name: `${tag}-source`, rowId: publicRow, startWeek: week, endWeek: week });
+    await json(admin, "POST", "/api/admin/personal-gantt", { action: "add", ids: [publicItem.id] });
+    const before = (await source()).items;
+    const start = await get(); assert(start.rows.length >= 1); assert(start.rows.every((r) => r.id < 0 && r.teamId === PRIVATE_TEAM));
+    const row = (await send({ action: "createRow" })).result.row!;
+    const create = async (name: string, w: string) => {
+      const r = await send({ action: "create", item: { name: `${tag}-${name}`, rowId: row.id, startWeek: w, endWeek: w } });
+      const i = r.result.items![0]; privateIds.add(i.id); return i;
+    };
+    let a = await create("A", week), b = await create("B", addWeeks(week, 1));
+    const overlap = await admin.post(endpoint, { data: { action: "update", entries: [{ id: a.id, version: a.version, patch: { startWeek: b.startWeek, endWeek: b.endWeek } }] } }); assert.equal(overlap.status(), 409);
+    const changed = await send({ action: "update", entries: [a, b].map((i) => ({ id: i.id, version: i.version, patch: { startWeek: addWeeks(i.startWeek, 1), endWeek: addWeeks(i.endWeek, 1) } })) });
+    a = changed.result.items!.find((i) => i.id === a.id)!; b = changed.result.items!.find((i) => i.id === b.id)!;
+    const snapshot = await get();
+    const stale = await admin.post(endpoint, { data: { action: "delete", entries: [{ id: a.id, version: a.version }, { id: b.id, version: b.version - 1 }] } }); assert.equal(stale.status(), 409); assert.deepEqual(await get(), snapshot);
+    const concurrent = await Promise.all(["one", "two"].map((notes) => admin.post(endpoint, { data: { action: "update", entries: [{ id: a.id, version: a.version, patch: { notes } }] } })));
+    assert.deepEqual(concurrent.map((r) => r.status()).sort(), [200, 409]);
+    const forged = await admin.post(endpoint, { data: { action: "delete", entries: [{ id: publicItem.id, version: publicItem.version }] } }); assert.equal(forged.status(), 400);
+    const owner = await admin.post(endpoint, { data: { action: "createRow", userId: 999 } }); assert.equal(owner.status(), 400);
+    const email = `${tag}@test.local`;
+    await json(regular, "POST", "/api/auth/register", { fullName: tag, email, password: "Private-Workspace-2026!", domainIds: [team.domainId], requestCross: false });
+    const users = await json<{ id: number; email: string }[]>(admin, "GET", "/api/admin/users");
+    await json(admin, "POST", `/api/admin/users/${users.find((u) => u.email === email)!.id}`, { action: "approve", domainIds: [team.domainId], canEditCross: false });
+    assert.equal((await regular.get(endpoint)).status(), 403);
+    assert.equal((await regular.post(endpoint, { data: { action: "delete", entries: [{ id: a.id, version: a.version }] } })).status(), 403);
+    assert.deepEqual((await source()).items, before);
+    assert.deepEqual((await json<PlanData>(regular, "GET", "/api/plan")).items, before);
+    console.log("PASS API: private namespace, owner checks, atomic overlap/version checks, concurrent edits and no public-plan changes");
+
+    browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
+    const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, locale: "he-IL", timezoneId: "Asia/Jerusalem", storageState: await admin.storageState() });
+    const page = await context.newPage(); page.setDefaultTimeout(30000);
+    const errors: string[] = []; page.on("pageerror", (e) => errors.push(e.message));
+    const response = () => page.waitForResponse((r) => r.url().endsWith(endpoint) && r.request().method() === "POST");
+    const bar = (id: number) => page.locator(`[data-bar="${id}"]`);
+    await page.goto(`${baseURL}/my-gantt`); await page.locator(`[data-domain="${PRIVATE_DOMAIN}"]`).waitFor();
+    await page.getByTestId("personal-show-source").check();
+    const own = await page.locator(`[data-domain="${PRIVATE_DOMAIN}"]`).boundingBox();
+    const cross = await page.locator("[data-cross=INFLUENCE]").boundingBox(); assert(own && cross && own.y < cross.y, "private row is not first");
+    await page.getByTestId("add-private-item").click(); await page.locator("#ni-name").fill(`${tag}-UI`);
+    assert.equal(await page.getByTestId("target-select").inputValue(), `team:${PRIVATE_TEAM}`);
+    const created = response(); await page.getByTestId("new-item-submit").click(); const r = await created; assert.equal(r.status(), 200);
+    const uiItem = (await r.json()).result.items[0] as ItemDTO; privateIds.add(uiItem.id);
+    await page.getByTestId("item-panel").waitFor(); assert.equal(await page.getByTestId("panel-name").inputValue(), `${tag}-UI`);
+    assert.equal(await page.getByTestId("open-source-item").count(), 0);
+    const catalog = await json<{ statuses: { key: string; bg: string }[]; priorities: { key: string }[] }>(admin, "GET", "/api/catalog");
+    const status = catalog.statuses.find((s) => s.key !== uiItem.status)!;
+    const priority = catalog.priorities.find((p) => p.key !== uiItem.priority)!.key;
+    let saved = response(); await page.locator("#p-status").selectOption(status.key); assert.equal((await saved).status(), 200);
+    saved = response(); await page.locator("#p-priority").selectOption(priority); assert.equal((await saved).status(), 200);
+    saved = response(); await page.locator("#p-notes").fill("הערה פרטית"); await page.locator("#p-status").focus(); assert.equal((await saved).status(), 200);
+    await page.keyboard.press("Escape"); await page.getByTestId("item-panel").waitFor({ state: "detached" });
+    assert.equal((await get()).items.find((i) => i.id === uiItem.id)!.notes, "הערה פרטית");
+    const color = await bar(uiItem.id).evaluate((el) => el.style.backgroundColor);
+    const expectedColor = await page.evaluate((c) => { const el = document.createElement("div"); el.style.backgroundColor = c; return el.style.backgroundColor; }, status.bg);
+    assert.equal(color, expectedColor);
+    const box = await bar(uiItem.id).boundingBox(); assert(box);
+    const weekW = (await page.locator(`[data-week="${week}"]`).boundingBox())!.width;
+    saved = response(); await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - weekW, box.y + box.height / 2, { steps: 7 }); await page.mouse.up(); assert.equal((await saved).status(), 200);
+    assert.equal((await get()).items.find((i) => i.id === uiItem.id)!.startWeek, addWeeks(week, 1));
+    saved = response(); await page.keyboard.press("Control+z"); assert.equal((await saved).status(), 200);
+    assert.equal((await get()).items.find((i) => i.id === uiItem.id)!.startWeek, week);
+    await bar(a.id).click({ modifiers: ["Control"] }); await bar(b.id).click({ modifiers: ["Shift"] });
+    await page.getByTestId("bulk-status").waitFor();
+    assert.equal(await page.getByTestId("personal-gantt-actions").count(), 0, "private contents offered for public curation");
+    saved = response(); await page.getByTestId("bulk-status").selectOption(status.key); assert.equal((await saved).status(), 200);
+    await page.keyboard.press("Escape");
+    await bar(publicItem.id).dblclick(); await page.getByTestId("item-panel").waitFor();
+    assert.equal(await page.getByTestId("panel-name").count(), 0); assert.equal(await page.locator("#p-status").isDisabled(), true);
+    await page.keyboard.press("Escape");
+    await bar(uiItem.id).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "מחיקת תכולה", exact: true }).click(); saved = response();
+    await page.getByRole("dialog").getByRole("button", { name: "מחיקה", exact: true }).click(); assert.equal((await saved).status(), 200);
+    await page.getByTestId("private-trash").click(); saved = response(); await page.locator(`[data-restore-private="${uiItem.id}"]`).click(); assert.equal((await saved).status(), 200);
+    await page.keyboard.press("Escape"); await bar(uiItem.id).waitFor();
+    await page.reload(); await bar(uiItem.id).waitFor();
+    await page.screenshot({ path: "/workspace/.setup/omar-workspace.png" });
+    assert.deepEqual((await source()).items, before); assert.deepEqual(errors, []);
+    const audit = await json<{ summary: string }[]>(admin, "GET", "/api/admin/audit?limit=2000");
+    assert(!audit.some((e) => e.summary.includes(`${tag}-UI`) || e.summary.includes(`${tag}-A`) || e.summary.includes(`${tag}-B`)), "private content leaked into shared audit");
+    console.log("PASS browser: private area first, creation, status colors, priority, notes, drag/undo, group editing, trash restore, persistence and source read-only");
+  } finally {
+    await browser?.close();
+    const state = await get().catch(() => undefined);
+    const ours = state?.items.filter((i) => privateIds.has(i.id)) ?? [];
+    if (ours.length) await send({ action: "delete", entries: ours.map((i) => ({ id: i.id, version: i.version })) });
+    if (publicRow) await admin.delete(`/api/rows/${publicRow}`);
+    await admin.dispose(); await regular.dispose();
+  }
+}
+main().catch((e) => { console.error(e); process.exitCode = 1; });

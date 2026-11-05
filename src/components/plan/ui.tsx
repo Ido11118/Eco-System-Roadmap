@@ -235,7 +235,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
       <div className="flex items-start gap-2 border-b border-ink-100 px-5 pb-3 pt-4">
         <div className="flex-1">
           <div className="mb-1 flex items-center gap-2 text-[11px] text-ink-500">
-            <span className="rounded bg-ink-100 px-1.5 py-0.5 font-mono">ID {item.id}</span>
+            {ui.personalGantt && item.id < 0 ? <span className="flex items-center gap-1"><Lock size={11} />פרטי</span> : <span className="rounded bg-ink-100 px-1.5 py-0.5 font-mono">ID {item.id}</span>}
             <span>{place.domain}{place.team !== place.domain ? ` / ${place.team}` : ""}</span>
           </div>
           {editable ? (
@@ -247,13 +247,14 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
         </div>
         <button className="icon-btn" onClick={onClose} aria-label="סגור"><X size={16} /></button>
       </div>
-      {ui.personalGantt && <button className="btn-secondary mx-5 mt-3" data-testid="open-source-item" onClick={() => router.push(`/plan?view=gantt&locate=${id}`)}>פתח במקור לעריכה</button>}
+      {ui.personalGantt && item.id > 0 && <button className="btn-secondary mx-5 mt-3" data-testid="open-source-item" onClick={() => router.push(`/plan?view=gantt&locate=${id}`)}>פתח במקור לעריכה</button>}
+      {ui.personalGantt && item.id < 0 && <p className="mx-5 mt-3 text-[12px] text-brand-700">תכולה פרטית בגאנט עמר · מוצגת רק לך</p>}
       {!editable && (
         <div className="mx-5 mt-3 flex items-center gap-2 rounded-md bg-ink-50 px-3 py-2 text-[12px] text-ink-500">
           <Lock size={13} /> {ui.personalGantt ? "התכולה מוצגת מהמקור לקריאה בלבד" : store.readOnly ? (store.kind === "live" ? "מצב צפייה בלבד פעיל — לעריכה כבה אותו בסרגל העליון" : "תצוגת Snapshot — צפייה בלבד") : "אין לך הרשאת עריכה לתחום זה — צפייה בלבד"}
         </div>
       )}
-      {store.kind === "live" && (
+      {store.kind === "live" && !(ui.personalGantt && item.id < 0) && (
         <div className="flex gap-1 px-5 pt-3">
           {(["details", "history"] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)} className={clsx("rounded-md px-2.5 py-1 text-[12.5px] font-medium", tab === t ? "bg-ink-100 text-ink-900" : "text-ink-500 hover:text-ink-900")}>
@@ -308,7 +309,7 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
       {editable && (
         <div className="flex items-center gap-2 border-t border-ink-100 px-5 py-3">
           <button className="btn-ghost text-red-600 hover:bg-red-50" onClick={async () => {
-            if (await confirm({ title: "מחיקת תכולה", text: <>האם אתה בטוח שברצונך למחוק את &quot;{item.name}&quot;?<span className="mt-1.5 block text-[12px] text-ink-500">אם תרצה לשחזר, התכולה תהיה זמינה ב-{DELETED_RETENTION_DAYS} הימים הקרובים תחת &quot;תכולות שנמחקו&quot; (עם אותו ID).</span></>, confirm: "מחיקה", danger: true })) {
+            if (await confirm({ title: "מחיקת תכולה", text: <>האם אתה בטוח שברצונך למחוק את &quot;{item.name}&quot;?<span className="mt-1.5 block text-[12px] text-ink-500">{ui.personalGantt && item.id < 0 ? "אפשר לשחזר תחת תכולות פרטיות שנמחקו, או לבטל בהודעה וב־Ctrl+Z." : <>אם תרצה לשחזר, התכולה תהיה זמינה ב-{DELETED_RETENTION_DAYS} הימים הקרובים תחת &quot;תכולות שנמחקו&quot; (עם אותו ID).</>}</span></>, confirm: "מחיקה", danger: true })) {
               await store.deleteItem(item); onClose();
             }
           }}><Trash2 size={14} />מחיקת תכולה</button>

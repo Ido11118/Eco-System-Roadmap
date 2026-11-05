@@ -64,7 +64,10 @@ async function main() {
     await bar(a.id).click({ button: "right" });
     const add = savedResponse(); await page.getByRole("menuitem", { name: "הוספה לגאנט שלי", exact: true }).click(); assert.equal((await add).status(), 200);
     assert.equal(await page.locator("[data-personal-item]").count(), 0, "private markers leaked into original view");
-    await page.getByTestId("nav-personal-gantt").click(); await bar(a.id).waitFor();
+    await page.getByTestId("nav-personal-gantt").click();
+    await page.getByTestId("personal-gantt-page").waitFor();
+    await bar(a.id).waitFor();
+    await page.locator(`[data-personal-item="${a.id}"]`).waitFor();
     assert.equal(await page.getByTestId("personal-show-source").isChecked(), false);
     assert.equal(await bar(b.id).count(), 0); assert.equal(await bar(c.id).count(), 0);
     assert.equal(await page.locator(`[data-lane-row="${empty}"]`).count(), 0);

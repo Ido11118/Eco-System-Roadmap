@@ -26,7 +26,7 @@ export function SelectionBar({ store }: { store: PlanStore }) {
   return <div className="flex shrink-0 items-center gap-2 border-b border-brand-200 bg-brand-50 px-4 py-1.5 text-[12px] text-brand-700" data-testid="bulk-bar" role="region" aria-label="פעולות על תכולות נבחרות"
     onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); store.undo(); } }}>
     <span className="font-medium" aria-live="polite">{items.length} נבחרו</span>
-    {!ui.personalGantt && <>
+    {(!ui.personalGantt || editable) && <>
     <select aria-label="שינוי סטטוס לבחירה" className="input h-7 w-auto py-0 text-[12px]" value="" disabled={!editable || busy} onChange={(e) => { if (e.target.value) void apply({ status: e.target.value }); }} data-testid="bulk-status">
       <option value="">שינוי סטטוס…</option>{cat.statuses.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
     </select>
@@ -60,7 +60,7 @@ export function ItemActionsMenu({ menu, store, onOpen, onDone, onDeleted }: {
     <div className="w-[250px] p-1" data-testid="row-menu">
       <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-ink-500">{multi ? `${items.length} תכולות נבחרו` : one.item.name}</div>
       {!multi && <MenuItem icon={<ExternalLink size={14} />} onClick={() => { onDone(); onOpen(one.item.id); }}>פתח פרטי תכולה</MenuItem>}
-      {ui.personalGantt && !multi && <MenuItem icon={<ExternalLink size={14} />} onClick={() => { onDone(); router.push(`/plan?view=gantt&locate=${one.item.id}`); }}>פתח במקור לעריכה</MenuItem>}
+      {ui.personalGantt && !multi && one.item.id > 0 && <MenuItem icon={<ExternalLink size={14} />} onClick={() => { onDone(); router.push(`/plan?view=gantt&locate=${one.item.id}`); }}>פתח במקור לעריכה</MenuItem>}
       <PersonalGanttActions store={store} items={items} onDone={onDone} />
       {editable ? (
         <>
@@ -91,7 +91,7 @@ export function ItemActionsMenu({ menu, store, onOpen, onDone, onDeleted }: {
               title: multi ? `מחיקת ${items.length} תכולות` : "מחיקת תכולה", danger: true, confirm: "מחיקה",
               text: <>
                 {multi ? `האם אתה בטוח שברצונך למחוק ${items.length} תכולות?` : <>האם אתה בטוח שברצונך למחוק את &quot;{one.item.name}&quot;?</>}
-                <span className="mt-1.5 block text-[12px] text-ink-500">אם תרצה לשחזר, התכולה תהיה זמינה ב-{DELETED_RETENTION_DAYS} הימים הקרובים תחת &quot;תכולות שנמחקו&quot; (עם אותו ID).</span>
+                <span className="mt-1.5 block text-[12px] text-ink-500">{ui.personalGantt && items.every((i) => i.id < 0) ? "אפשר לשחזר תחת תכולות פרטיות שנמחקו, או לבטל בהודעה וב־Ctrl+Z." : <>אם תרצה לשחזר, התכולה תהיה זמינה ב-{DELETED_RETENTION_DAYS} הימים הקרובים תחת &quot;תכולות שנמחקו&quot; (עם אותו ID).</>}</span>
               </>,
             });
             if (!ok) return;

@@ -11,6 +11,7 @@ import {
   primaryKey, uniqueIndex, index, check, varchar,
 } from "drizzle-orm/pg-core";
 import type { Dependency } from "@/lib/types";
+import type { PrivateState } from "@/lib/privateWorkspace";
 
 export const userRole = pgEnum("user_role", ["SUPER", "USER"]);
 export const accountStatus = pgEnum("account_status", ["PENDING", "APPROVED", "REJECTED", "SUSPENDED"]);
@@ -371,3 +372,10 @@ export const personalGanttItems = pgTable("personal_gantt_items", {
   itemId: integer("item_id").notNull().references(() => workItems.id, { onDelete: "cascade" }),
   createdAt: ts("created_at").notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.userId, t.itemId] })]);
+
+// Owned private content, never part of work_items, loadPlan or shared audit logs.
+export const personalGanttWorkspaces = pgTable("personal_gantt_workspaces", {
+  userId: integer("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  version: integer("version").notNull().default(1),
+  state: jsonb("state").$type<PrivateState>().notNull(),
+});

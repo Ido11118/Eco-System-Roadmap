@@ -28,6 +28,7 @@ export function usePersonalGantt(me: Me, enabled = true) {
 export function PersonalGanttActions({ store, items, onDone, toolbar = false }: {
   store: PlanStore; items: ItemDTO[]; onDone?: () => void; toolbar?: boolean;
 }) {
+  items = items.filter((i) => i.id > 0);
   const { me } = useWorkspaceUI();
   const enabled = me.role === "SUPER" && store.kind === "live";
   const selection = usePersonalGantt(me, enabled);

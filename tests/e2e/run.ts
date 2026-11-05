@@ -876,7 +876,9 @@ async function main() {
     await pAdmin.hover("[data-testid=add-fab]");
     await pAdmin.waitForSelector("[data-testid=add-item]");
     const f1 = (await pAdmin.locator("[data-testid=add-fab]").boundingBox())!;
-    assert(Math.abs(f0.x - f1.x) < 1 && Math.abs(f0.y - f1.y) < 1, `FAB moved ${JSON.stringify(f0)} → ${JSON.stringify(f1)}`);
+    // Rotation changes the axis-aligned bounding box; a stationary button keeps
+    // its center, including while its icon/button transition is in progress.
+    assert(Math.abs((f0.x + f0.width / 2) - (f1.x + f1.width / 2)) < 1 && Math.abs((f0.y + f0.height / 2) - (f1.y + f1.height / 2)) < 1, `FAB moved ${JSON.stringify(f0)} → ${JSON.stringify(f1)}`);
     const order = await pAdmin.locator("[data-testid=add-fab-menu] button[data-testid^=add-]").evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
     assert(JSON.stringify(order.slice(0, 3)) === JSON.stringify(["add-item", "add-milestone", "add-sprint"]), `FAB order ${order}`);
     await pAdmin.mouse.move(800, 300);
