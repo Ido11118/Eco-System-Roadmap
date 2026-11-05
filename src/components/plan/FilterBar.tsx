@@ -24,9 +24,10 @@ import { depsOf } from "@/lib/deps";
 
 export type SavedView = { id: number; name: string; config: ViewConfig; isDefault: boolean };
 
-export function FilterBar({ data, view, setView, onToday, mode, onLocate }: {
+export function FilterBar({ data, view, setView, onToday, mode, onLocate, itemsOnly = false }: {
   data: PlanData; view: ViewConfig; setView: (v: ViewConfig) => void; onToday: () => void; mode: "gantt" | "table" | "compare";
   onLocate?: (itemId: number) => void;
+  itemsOnly?: boolean;
 }) {
   const cat = useCatalog();
   // בגאנט ובהשוואה אפשר לסנן גם את השורות הרוחביות (בטבלה אין מידע רוחבי)
@@ -74,7 +75,7 @@ export function FilterBar({ data, view, setView, onToday, mode, onLocate }: {
             <div className="flex flex-col items-start gap-2.5 [&>*]:max-w-full" data-testid="mobile-filter-sheet">
               {filters}
               <TimeControl value={view.time} onChange={(t) => setView({ ...view, time: t })} />
-              {mode === "gantt" && <LayerToggles view={view} setView={setView} mode={mode} />}
+              {mode === "gantt" && !itemsOnly && <LayerToggles view={view} setView={setView} mode={mode} />}
               <div className="flex items-center gap-1.5">
                 <DisplayOptions view={view} setView={setView} mode={mode} />
                 <SavedViews view={view} setView={setView} data={data} />
@@ -92,7 +93,7 @@ export function FilterBar({ data, view, setView, onToday, mode, onLocate }: {
       {filters}
       {sep}
       <TimeControl value={view.time} onChange={(t) => setView({ ...view, time: t })} />
-      {mode === "gantt" && <>
+      {mode === "gantt" && !itemsOnly && <>
         {sep}
         <LayerToggles view={view} setView={setView} mode={mode} />
       </>}

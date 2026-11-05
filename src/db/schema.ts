@@ -363,3 +363,11 @@ export const deletedUsers = pgTable("deleted_users", {
   deletedAt: ts("deleted_at").notNull().defaultNow(),
   deletedById: integer("deleted_by_id"),
 });
+
+// Private curation, separate from plan data, snapshots and the shared audit log.
+// Soft deletion of a work item retains membership so restoration brings it back.
+export const personalGanttItems = pgTable("personal_gantt_items", {
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").notNull().references(() => workItems.id, { onDelete: "cascade" }),
+  createdAt: ts("created_at").notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.userId, t.itemId] })]);

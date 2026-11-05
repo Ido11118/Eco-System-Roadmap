@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { ExternalLink, Trash2 } from "lucide-react";
 import { useConfirm } from "@/components/ui/dialog";
@@ -8,6 +9,7 @@ import { DELETED_RETENTION_DAYS } from "@/lib/constants";
 import type { ItemDTO } from "@/lib/types";
 import { useCatalog } from "@/components/CatalogProvider";
 import type { PlanStore } from "./store";
+import { PersonalGanttActions } from "./PersonalGanttActions";
 import { useWorkspaceUI } from "./ui";
 
 export function SelectionBar({ store }: { store: PlanStore }) {
@@ -24,12 +26,15 @@ export function SelectionBar({ store }: { store: PlanStore }) {
   return <div className="flex shrink-0 items-center gap-2 border-b border-brand-200 bg-brand-50 px-4 py-1.5 text-[12px] text-brand-700" data-testid="bulk-bar" role="region" aria-label="פעולות על תכולות נבחרות"
     onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); store.undo(); } }}>
     <span className="font-medium" aria-live="polite">{items.length} נבחרו</span>
+    {!ui.personalGantt && <>
     <select aria-label="שינוי סטטוס לבחירה" className="input h-7 w-auto py-0 text-[12px]" value="" disabled={!editable || busy} onChange={(e) => { if (e.target.value) void apply({ status: e.target.value }); }} data-testid="bulk-status">
       <option value="">שינוי סטטוס…</option>{cat.statuses.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
     </select>
     <select aria-label="שינוי תיעדוף לבחירה" className="input h-7 w-auto py-0 text-[12px]" value="" disabled={!editable || busy} onChange={(e) => { if (e.target.value) void apply({ priority: e.target.value }); }} data-testid="bulk-priority">
       <option value="">שינוי תיעדוף…</option>{cat.priorities.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
     </select>
+    </>}
+    <PersonalGanttActions store={store} items={items} toolbar />
     <button className="btn-ghost btn-sm" onClick={() => ui.setSelectedItems(new Set())}>ניקוי בחירה</button>
     <span className="hidden text-[11px] text-ink-500 lg:inline">Ctrl / ⌘ + לחיצה לבחירה · קליק ימני לפעולות · Esc לניקוי</span>
   </div>;
@@ -39,6 +44,8 @@ export function SelectionBar({ store }: { store: PlanStore }) {
 export function ItemActionsMenu({ menu, store, onOpen, onDone, onDeleted }: {
   menu: { items: ItemDTO[]; one: { item: ItemDTO; editable: boolean } }; store: PlanStore; onOpen: (id: number) => void; onDone: () => void; onDeleted: () => void;
 }) {
+  const router = useRouter();
+  const ui = useWorkspaceUI();
   const cat = useCatalog();
   const confirm = useConfirm();
   const { items, one } = menu;
@@ -53,6 +60,8 @@ export function ItemActionsMenu({ menu, store, onOpen, onDone, onDeleted }: {
     <div className="w-[250px] p-1" data-testid="row-menu">
       <div className="truncate px-2.5 pb-1 pt-1 text-[11px] font-semibold text-ink-500">{multi ? `${items.length} תכולות נבחרו` : one.item.name}</div>
       {!multi && <MenuItem icon={<ExternalLink size={14} />} onClick={() => { onDone(); onOpen(one.item.id); }}>פתח פרטי תכולה</MenuItem>}
+      {ui.personalGantt && !multi && <MenuItem icon={<ExternalLink size={14} />} onClick={() => { onDone(); router.push(`/plan?view=gantt&locate=${one.item.id}`); }}>פתח במקור לעריכה</MenuItem>}
+      <PersonalGanttActions store={store} items={items} onDone={onDone} />
       {editable ? (
         <>
           <div className="my-1 border-t border-ink-100" />
@@ -90,7 +99,7 @@ export function ItemActionsMenu({ menu, store, onOpen, onDone, onDeleted }: {
             else { await store.deleteItem(items[0]); onDeleted(); }
           }}>{multi ? `מחיקת ${items.length} תכולות` : "מחיקת תכולה"}</MenuItem>
         </>
-      ) : <div className="px-2.5 py-1.5 text-[12px] text-ink-400">אין לך הרשאת עריכה לתחום זה — צפייה בלבד</div>}
+      ) : !ui.personalGantt && <div className="px-2.5 py-1.5 text-[12px] text-ink-400">אין לך הרשאת עריכה לתחום זה — צפייה בלבד</div>}
     </div>
   );
 }

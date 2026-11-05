@@ -30,6 +30,7 @@ type UI = {
   me: Me;
   openItem: (id: number) => void;
   selectedItemId: number | null;
+  personalGantt?: { ids: number[]; showSource: boolean };
   selectedItems: Set<number>;
   setSelectedItems: React.Dispatch<React.SetStateAction<Set<number>>>;
   openNewItem: (p?: NewItemPrefill) => void;
@@ -127,11 +128,12 @@ function TargetSelect({ data, store, value, onChange }: {
   );
 }
 
-export function WorkspaceUIProvider({ store, me, children, placing, onScheduled }: {
+export function WorkspaceUIProvider({ store, me, children, placing, onScheduled, personalGantt }: {
   store: PlanStore; me: Me; children: React.ReactNode;
   /** פריט מהבאקלוג שמשבצים כרגע על הגאנט: כל "הוספת תכולה" (מסימון טווח) תמלא את פרטיו */
   placing?: BacklogDTO | null;
   onScheduled?: (it: ItemDTO, onGantt: boolean) => void;
+  personalGantt?: { ids: number[]; showSource: boolean };
 }) {
   const [itemId, setItemId] = useState<number | null>(null);
   const closeItem = useCallback(() => setItemId(null), []);
@@ -160,14 +162,14 @@ export function WorkspaceUIProvider({ store, me, children, placing, onScheduled 
     me,
     openItem: (id) => setItemId(id),
     selectedItemId: itemId,
-    selectedItems, setSelectedItems,
+    selectedItems, setSelectedItems, personalGantt,
     openNewItem: (p) => setNewItem(placing && !p?.backlog
       ? { ...p, teamId: p?.teamId ?? placing.teamId, name: placing.name, priority: placing.priority, notes: placing.notes, backlog: { id: placing.id, version: placing.version, onGantt: true } }
       : p ?? {}),
     openMilestone: (m, prefill) => setMs({ m, prefill }),
     openSprint: (s, prefill) => setSp({ s, prefill }),
     placing: placing ?? null,
-  }), [itemId, me, placing, selectedItems]);
+  }), [itemId, me, placing, selectedItems, personalGantt]);
   return (
     <UICtx.Provider value={ui}>
       {children}
@@ -186,6 +188,8 @@ export function WorkspaceUIProvider({ store, me, children, placing, onScheduled 
 // חלונית פרטי תכולה
 // ---------------------------------------------------------------------------
 function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClose: () => void }) {
+  const ui = useWorkspaceUI();
+  const router = useRouter();
   const data = store.data;
   const item = data?.items.find((i) => i.id === id);
   const confirm = useConfirm();
@@ -243,9 +247,10 @@ function ItemPanel({ store, id, onClose }: { store: PlanStore; id: number; onClo
         </div>
         <button className="icon-btn" onClick={onClose} aria-label="סגור"><X size={16} /></button>
       </div>
+      {ui.personalGantt && <button className="btn-secondary mx-5 mt-3" data-testid="open-source-item" onClick={() => router.push(`/plan?view=gantt&locate=${id}`)}>פתח במקור לעריכה</button>}
       {!editable && (
         <div className="mx-5 mt-3 flex items-center gap-2 rounded-md bg-ink-50 px-3 py-2 text-[12px] text-ink-500">
-          <Lock size={13} /> {store.readOnly ? (store.kind === "live" ? "מצב צפייה בלבד פעיל — לעריכה כבה אותו בסרגל העליון" : "תצוגת Snapshot — צפייה בלבד") : "אין לך הרשאת עריכה לתחום זה — צפייה בלבד"}
+          <Lock size={13} /> {ui.personalGantt ? "התכולה מוצגת מהמקור לקריאה בלבד" : store.readOnly ? (store.kind === "live" ? "מצב צפייה בלבד פעיל — לעריכה כבה אותו בסרגל העליון" : "תצוגת Snapshot — צפייה בלבד") : "אין לך הרשאת עריכה לתחום זה — צפייה בלבד"}
         </div>
       )}
       {store.kind === "live" && (

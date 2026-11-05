@@ -13,7 +13,7 @@ import { api } from "@/lib/api";
 import { useIsMobile } from "@/components/ui/useMobile";
 import { currentPrefs, savePrefs, useTextSize, zoomOf } from "@/components/plan/prefs";
 
-export type NavKey = "gantt" | "table" | "backlog" | "compare" | "snapshots" | "admin";
+export type NavKey = "gantt" | "table" | "backlog" | "compare" | "snapshots" | "admin" | "personal";
 
 /** sidebarAction: כפתור פעולה בתחתית סרגל הצד (למשל "הוספה בעזרת AI" בדף התוכנית) */
 export function AppShell({ me, active, children, sidebarAction }: { me: Me; active: NavKey; children: React.ReactNode; sidebarAction?: React.ReactNode }) {
@@ -71,6 +71,8 @@ function Sidebar({ me, active, action, mobile, onNavigate }: { me: Me; active: N
     { key: "snapshots", href: "/snapshots", label: "תמונות מצב", icon: <Camera size={17} />, testid: "nav-snapshots" },
   ];
   if (isSuper) items.push({ key: "admin", href: "/admin", label: "ניהול מערכת", icon: <ShieldCheck size={17} />, badge: pending, testid: "nav-admin" });
+
+  if (isSuper) items.push({ key: "personal", href: "/my-gantt", label: "הגאנט שלי", icon: <GanttChart size={17} />, testid: "nav-personal-gantt" });
 
   return (
     <aside className={clsx("flex shrink-0 flex-col border-l border-ink-200 bg-[#fbfcfe] transition-[width] duration-150", collapsed ? "w-[56px]" : "w-[196px]")}

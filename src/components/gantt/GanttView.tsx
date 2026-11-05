@@ -3,7 +3,7 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import {
-  Plus, MoreVertical, Trash2, ArrowUpToLine, ArrowDownToLine, Diamond, Flag, ExternalLink, PanelTopOpen, Pencil, Eye, EyeOff, X, RectangleHorizontal,
+  Plus, MoreVertical, Trash2, ArrowUpToLine, ArrowDownToLine, Diamond, Flag, ExternalLink, PanelTopOpen, Pencil, Eye, EyeOff, X, RectangleHorizontal, Check,
 } from "lucide-react";
 import type { ItemDTO, MilestoneDTO, PlanData, RowDTO, SprintDTO, ViewConfig } from "@/lib/types";
 import { CROSS_ROW_LABELS } from "@/lib/constants";
@@ -341,7 +341,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     e.preventDefault();
     tip.hide();
     if (e.ctrlKey || e.metaKey || e.shiftKey) {
-      if (editable) ui.setSelectedItems((s) => { const n = new Set(s); if (n.has(item.id)) n.delete(item.id); else n.add(item.id); return n; });
+      if (editable || ui.personalGantt) ui.setSelectedItems((s) => { const n = new Set(s); if (n.has(item.id)) n.delete(item.id); else n.add(item.id); return n; });
       return;
     }
     if (!ui.selectedItems.has(item.id)) ui.setSelectedItems(new Set());
@@ -365,7 +365,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
     const box = barBox(opts?.start ?? i.startWeek, opts?.end ?? i.endWeek);
     if (!box) return null;
     const m = cat.status(i.status);
-    const dim = filtering && !matches(i);
+    const dim = (filtering && !matches(i)) || (ui.personalGantt?.showSource && !ui.personalGantt.ids.includes(i.id));
     const isDragged = drag?.started && drag.items.some((x) => x.id === i.id) && !opts?.ghost;
     const selected = ui.selectedItems.has(i.id) || ui.selectedItemId === i.id;
     const twoLines = fitsTwoLines(height - 6, barFont);
@@ -401,6 +401,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
         )}
         {/* השם "נדבק" לקצה הגלוי: גם כשתחילת הקובייה גלולה מתחת לעמודות התחום/צוות, הטקסט נשאר גלוי עד שהקובייה נעלמת */}
         <span className="sticky flex min-w-0 max-w-full items-center gap-1 px-1.5" style={{ right: "var(--labels-w)" }}>
+          {ui.personalGantt?.ids.includes(i.id) && <span data-personal-item={i.id} title="בגאנט שלי" aria-label="בגאנט שלי"><Check size={12} strokeWidth={3} /></span>}
           <DepBadge item={i} />
           <span className={twoLines ? "line-clamp-2 whitespace-normal break-words leading-[1.2]" : "truncate"} data-bar-label>{i.name}</span>
         </span>
@@ -598,10 +599,11 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
       <SelectionBar store={store} />
       <div className="min-h-0 flex-1">
       <GanttGrid ref={gridRef} timeline={timeline} weekW={weekW} domains={data.domains} teams={teams}
-        teamLanes={teamLanes} crossGroups={crossLayout.groups} todayIndex={todayIndex}
+        teamLanes={teamLanes} crossGroups={ui.personalGantt && !ui.personalGantt.showSource ? crossLayout.groups.filter((g) => g.lanes.length > 0) : crossLayout.groups} todayIndex={todayIndex}
         renderLane={renderLane} renderTeamOverlay={renderTeamOverlay} renderTeamMarkers={renderTeamMarkers} renderBodyOverlay={renderBodyOverlay}
         renderDomainOverlay={renderDomainOverlay} renderRowControl={renderRowControl} teamLabelExtra={teamLabelExtra}
         teamEditable={(t) => store.canEditTeam(t)}
+        readOnlyHints={ui.personalGantt ? false : undefined}
         // בטלפון אין סימון טווח (הקשה תמימה בזמן גלילה הייתה פותחת חלון הוספה) — מוסיפים מכפתור ה-+
         onLaneMouseDown={store.readOnly || mobile ? undefined : onLaneMouseDown} onLaneContextMenu={onLaneContextMenu}
         panMode={store.readOnly && !mobile}
