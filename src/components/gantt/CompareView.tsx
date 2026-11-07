@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/toast";
 import { LabelMenu } from "./GanttView";
 import type { PlanData, ViewConfig } from "@/lib/types";
 import { useCatalog } from "@/components/CatalogProvider";
-import { useBarFontSize, useGanttSize } from "@/components/plan/prefs";
+import { useBarFontSize, useFitBarText, useGanttSize } from "@/components/plan/prefs";
 import {
   buildCompareLayout, summarize, datesChanged, COMPARE_FILTERS, TAG_LABELS, type CompareUnit,
 } from "@/lib/compare";
@@ -19,7 +19,8 @@ import { useTooltip } from "@/components/ui/tooltip";
 import { useWorkspaceUI } from "@/components/plan/ui";
 import { crossRowVisible, itemMatches, timeWindow, visibleTeamIds } from "@/components/plan/filters";
 import { GanttGrid, useCurrentWeek, type CrossGroup, type GanttGridHandle, type LaneSpec } from "./GanttGrid";
-import { geometry, fitsTwoLines } from "./geometry";
+import { BarLabel } from "./BarLabel";
+import { geometry } from "./geometry";
 
 export type CompareHandle = { goToday: () => void };
 
@@ -33,6 +34,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
   const ui = useWorkspaceUI();
   const cat = useCatalog();
   const [barFont] = useBarFontSize(ui.me.preferences);
+  const [fitText] = useFitBarText(ui.me.preferences);
   const gridRef = useRef<GanttGridHandle>(null);
   const [gSize] = useGanttSize(ui.me.preferences);
   const mobile = useIsMobile();
@@ -158,7 +160,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
             <div {...events} data-plan={u.id}
               className={clsx("plan-dash absolute z-10 flex items-center overflow-clip rounded-[5px]", deleted ? "is-deleted cursor-default" : "cursor-pointer")}
               style={{ right: pb.right, width: pb.width, top: 2, height: h - 4 }}>
-              {deleted && <span className="sticky min-w-0 truncate px-1.5 text-[11.5px] text-red-700 line-through decoration-red-400" style={{ right: "var(--labels-w)" }}>{u.name} · נמחק</span>}
+              {deleted && <span className="sticky min-w-0 truncate px-1.5 text-[11.5px] text-red-700 line-through decoration-red-400" style={{ right: "var(--labels-w)" }}>{fitText ? <BarLabel text={`${u.name} · נמחק`} height={h - 4} maximum={barFont} fit /> : <>{u.name} · נמחק</>}</span>}
             </div>
           )}
           {link && <div className="plan-link pointer-events-none absolute z-[9]" data-link={u.id} data-dir={link.dir}
@@ -169,7 +171,7 @@ export const CompareView = memo(forwardRef<CompareHandle, {
               style={{ right: ab.right + (changed ? 2 : 0), width: ab.width - (changed ? 4 : 0), top: changed ? 6 : 3, height: changed ? h - 12 : h - 6, background: m.bg, color: m.fg, borderColor: m.border, fontSize: barFont }}>
               <span className="sticky flex min-w-0 max-w-full items-center gap-1 px-1" style={{ right: "var(--labels-w)" }}>
                 {added && <span className="shrink-0 rounded bg-brand-600 px-1 text-[9.5px] font-bold text-white">חדש</span>}
-                <span className={fitsTwoLines(changed ? h - 12 : h - 6, barFont) ? "line-clamp-2 whitespace-normal break-words leading-[1.2]" : "truncate"}>{u.name}</span>
+                <BarLabel text={u.name} height={changed ? h - 12 : h - 6} maximum={barFont} fit={fitText} />
               </span>
             </div>
           )}

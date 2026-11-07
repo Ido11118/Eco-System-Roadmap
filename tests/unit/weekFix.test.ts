@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { legacyWeekNumber, remapLegacyDate, remapLegacyWeek } from "@/lib/weekFix";
-import { addDays, addWeeks, dayOfWeek, weekNumber, weekStartOf, weekYear } from "@/lib/weeks";
+import { addDays, addWeeks, dayOfWeek, weekNumber, weekStartOf, weekYear, weekEndOf, weeksDiff } from "@/lib/weeks";
+
+// The one-time October migration must keep its original calendar rule forever.
+function historicalWeek(day: string) {
+  const year = Number(weekEndOf(day).slice(0, 4));
+  return [weeksDiff(weekStartOf(`${year}-01-01`), day) + 1, year];
+}
 
 describe("week numbering fix (10/2026)", () => {
   it("legacy numbering is what users saw: 18/10/2026 (this week) was shown as 'week 42', 08/11/2026 as 'week 45'", () => {
@@ -19,7 +25,7 @@ describe("week numbering fix (10/2026)", () => {
     let prev = "";
     for (let s = "2024-01-07"; s <= "2030-12-29"; s = addWeeks(s, 1)) {
       const before = legacyWeekNumber(s), after = remapLegacyWeek(s);
-      expect([weekNumber(after), weekYear(after)]).toEqual([before.num, before.year]);
+      expect(historicalWeek(after)).toEqual([before.num, before.year]);
       if (prev) expect(after > prev).toBe(true);
       prev = after;
     }
@@ -36,7 +42,7 @@ describe("week numbering fix (10/2026)", () => {
   it("every day 2024–2030 keeps its week number, year and weekday", () => {
     for (let d = "2024-01-07"; d <= "2030-12-31"; d = addDays(d, 1)) {
       const before = legacyWeekNumber(weekStartOf(d)), after = remapLegacyDate(d);
-      expect([weekNumber(weekStartOf(after)), weekYear(weekStartOf(after)), dayOfWeek(after)]).toEqual([before.num, before.year, dayOfWeek(d)]);
+      expect([...historicalWeek(weekStartOf(after)), dayOfWeek(after)]).toEqual([before.num, before.year, dayOfWeek(d)]);
     }
   });
 });

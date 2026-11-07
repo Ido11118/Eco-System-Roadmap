@@ -37,7 +37,7 @@ describe("ai import", () => {
   it("prompt explains the org week numbering with the current week as anchor (no week table)", () => {
     const p = buildAiPrompt(data, perms, cat, "2026-10-16");
     expect(p).toContain("השבוע הנוכחי: שבוע 42 של 2026 (ראשון 2026-10-11 עד שבת 2026-10-17)");
-    expect(p).toContain("שבוע 1 של שנה הוא השבוע (ראשון–שבת) שבו חל ה-1 בינואר");
+    expect(p).toContain("שבוע 1 מכיל את 3 בינואר");
     expect(p).not.toContain("טבלת שבועות");
     expect(p).toContain('"week": 44'); // דוגמת הפלט בשבועות
   });
@@ -46,9 +46,9 @@ describe("ai import", () => {
     const es = parseImport(JSON.stringify({ items: [
       { name: "שבועות", team: "azarim-1", start: { week: 52, year: 2026 }, end: { week: 2, year: 2027 } },
       { name: "תאריכים", team: "azarim-1", start: "2026-11-04", end: "2026-11-12" },
-      { name: "שבוע 53 לא קיים", team: "azarim-1", start: { week: 53, year: 2026 }, end: { week: 1, year: 2027 } },
+      { name: "שבוע 53 לא קיים", team: "azarim-1", start: { week: 53, year: 2027 }, end: { week: 1, year: 2028 } },
     ] }), data, cat);
-    expect([es[0].start, es[0].end]).toEqual(["2026-12-20", "2027-01-03"]);
+    expect([es[0].start, es[0].end]).toEqual(["2026-12-20", "2027-01-10"]);
     expect(validateEntry(es[0], data, perms)).toEqual([]);
     expect(toPayload([es[1]]).items[0]).toMatchObject({ startWeek: "2026-11-01", endWeek: "2026-11-08" });
     expect(validateEntry(es[2], data, perms).join()).toContain("שבוע התחלה לא תקין");

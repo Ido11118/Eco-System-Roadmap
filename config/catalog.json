@@ -54,7 +54,7 @@
     },
     {
       "key": "BLOCKED",
-      "label": "חסום / קיימת בעיה",
+      "label": "לא בוצע",
       "bg": "#dc2626",
       "fg": "#ffffff",
       "border": "#b91c1c",

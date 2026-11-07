@@ -2,7 +2,7 @@
 // עד התיקון שבוע 1 הוגדר כ"השבוע שמתחיל ביום ראשון הראשון של השנה" (ב-2026: 04/01), אבל בארגון שבוע 1 הוא
 // השבוע שבו חל ה-1 בינואר (ב-2026: 28/12/2025). המשתמשים הזינו תכולות לפי מספרי השבוע שהוצגו —
 // ולכן כדי שכל תכולה תישאר באותו מספר שבוע, מזיזים את התאריך שלה ליום ראשון של אותו מספר במספור הנכון.
-import { addDays, dayOfWeek, sundayOfWeekNumber, weeksDiff, weekStartOf, type ISODate } from "./weeks";
+import { addDays, dayOfWeek, weeksDiff, weekStartOf, type ISODate } from "./weeks";
 
 /** יום ראשון הראשון של השנה — הכלל הישן (השגוי) לשבוע 1 */
 function legacyFirstSunday(year: number): ISODate {
@@ -23,7 +23,9 @@ export function legacyWeekNumber(sunday: ISODate): { year: number; num: number }
  */
 export function remapLegacyWeek(sunday: ISODate): ISODate {
   const { year, num } = legacyWeekNumber(sunday);
-  return sundayOfWeekNumber(year, num);
+  // Freeze the October 2026 migration rule. Later display-numbering changes
+  // must never change this historical data transformation.
+  return addDays(weekStartOf(`${year}-01-01`), (num - 1) * 7);
 }
 
 /** תאריך כלשהו (אבן דרך, תחילת/סוף ספרינט) → אותו יום בשבוע, באותו מספר שבוע במספור הנכון */

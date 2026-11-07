@@ -17,7 +17,7 @@ import { useConfirm, Dialog } from "@/components/ui/dialog";
 import { useIsMobile } from "@/components/ui/useMobile";
 import { shiftTime, timeLabel, defaultViewConfig, CROSS_FILTER } from "./filters";
 import { CROSS_ROW_LABELS } from "@/lib/constants";
-import { sanitizeView, TEXT_SIZES, useTextSize, useBarFontSize, BAR_FONT, useGanttSize, GANTT_SIZE, currentDisplay, applyDisplay } from "./prefs";
+import { sanitizeView, TEXT_SIZES, useTextSize, useBarFontSize, useFitBarText, BAR_FONT, useGanttSize, GANTT_SIZE, currentDisplay, applyDisplay } from "./prefs";
 import { densityGeometry } from "@/components/gantt/geometry";
 import { useMe } from "./ui";
 import { depsOf } from "@/lib/deps";
@@ -273,6 +273,7 @@ function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v
   const me = useMe();
   const [textSize, setTextSize] = useTextSize(me?.preferences ?? {});
   const [barFont, setBarFont] = useBarFontSize(me?.preferences ?? {});
+  const [fitText, setFitText] = useFitBarText(me?.preferences ?? {});
   const [gSize, setGSize] = useGanttSize(me?.preferences ?? {});
   const [advanced, setAdvanced] = useState(false);
   const base = densityGeometry(view.density);
@@ -306,6 +307,10 @@ function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v
               {custom && <div className="mt-1 text-[11px] text-ink-400">מוגדר ידנית בהגדרות המתקדמות</div>}
             </div>
           )}
+          {mode !== "table" && <label className="flex cursor-pointer items-start gap-2 text-[12.5px]">
+            <input type="checkbox" checked={fitText} onChange={(e) => setFitText(e.target.checked)} className="mt-0.5" data-testid="fit-bar-text" />
+            <span>התאם את גודל המלל בתכולה<span className="mt-0.5 block text-[11px] text-ink-400">עד גודל המלל שנבחר, ולא פחות מ־10px. מלל שלא נכנס גם בגודל המזערי ייחתך.</span></span>
+          </label>}
           {mode !== "table" && (
             <div className="border-t border-ink-100 pt-2">
               <button className="flex w-full items-center justify-between text-[12.5px] font-medium text-ink-700 hover:text-ink-900" onClick={() => setAdvanced((a) => !a)}
@@ -321,8 +326,8 @@ function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v
                   <SizeControl label="גודל המלל בקוביות" unit="px" value={barFont} min={BAR_FONT.min} max={BAR_FONT.max}
                     onChange={setBarFont} testid="bar-font" />
                   <p className="text-[11px] leading-snug text-ink-400">כשגובה השורה מספיק לשתי שורות טקסט, שם ארוך ממשיך לשורה השנייה במקום להיחתך.</p>
-                  {(custom || barFont !== BAR_FONT.def) && (
-                    <button className="text-[12px] text-brand-600 hover:underline" onClick={() => { setGSize({}); setBarFont(BAR_FONT.def); }} data-testid="advanced-reset">איפוס לברירת המחדל</button>
+                  {(custom || barFont !== BAR_FONT.def || fitText) && (
+                    <button className="text-[12px] text-brand-600 hover:underline" onClick={() => { setGSize({}); setBarFont(BAR_FONT.def); setFitText(false); }} data-testid="advanced-reset">איפוס לברירת המחדל</button>
                   )}
                 </div>
               )}

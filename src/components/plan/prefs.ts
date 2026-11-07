@@ -38,15 +38,24 @@ export function uiZoom(): number {
   return typeof window === "undefined" ? 1 : zoomOf(cache?.textSize);
 }
 /** גודל הטקסט בתוך קוביות הגאנט — נשמר אישית ומתעדכן מיד בכל המסכים */
-export const BAR_FONT = { min: 9, max: 20, def: 12 };
+export const BAR_FONT = { min: 10, max: 20, def: 12 };
 export function useBarFontSize(initial: UserPreferences): [number, (n: number) => void] {
-  const [v, setV] = useState<number>(() => currentPrefs(initial).barFontSize ?? BAR_FONT.def);
+  const [v, setV] = useState<number>(() => Math.max(BAR_FONT.min, currentPrefs(initial).barFontSize ?? BAR_FONT.def));
   useEffect(() => {
-    const l = () => setV(cache?.barFontSize ?? BAR_FONT.def);
+    const l = () => setV(Math.max(BAR_FONT.min, cache?.barFontSize ?? BAR_FONT.def));
     listeners.add(l);
     return () => { listeners.delete(l); };
   }, []);
   return [v, (n) => savePrefs({ barFontSize: n })];
+}
+
+export function useFitBarText(initial: UserPreferences): [boolean, (enabled: boolean) => void] {
+  const [v, setV] = useState(() => currentPrefs(initial).fitBarText ?? false);
+  useEffect(() => {
+    const listener = () => setV(cache?.fitBarText ?? false);
+    listeners.add(listener); return () => { listeners.delete(listener); };
+  }, []);
+  return [v, (fitBarText) => savePrefs({ fitBarText })];
 }
 
 /** הגדרות תצוגה מתקדמות: רוחב עמודת שבוע וגובה שורה בגאנט. ערך חסר = לפי הצפיפות (צפופה/רגילה/מרווחת) */
@@ -102,7 +111,7 @@ export function useTextSize(initial: UserPreferences): [TextSize, (t: TextSize) 
 export function currentDisplay(): ViewDisplay {
   const p = cache ?? {};
   return {
-    textSize: p.textSize ?? "md", barFontSize: p.barFontSize ?? BAR_FONT.def, ganttSize: p.ganttSize ?? {},
+    textSize: p.textSize ?? "md", barFontSize: Math.max(BAR_FONT.min, p.barFontSize ?? BAR_FONT.def), fitBarText: p.fitBarText ?? false, ganttSize: p.ganttSize ?? {},
     ganttCols: colsOf(p),
   };
 }
@@ -111,7 +120,8 @@ export function applyDisplay(d: ViewDisplay | undefined) {
   if (!d) return;
   const patch: Partial<UserPreferences> = {};
   if (d.textSize) patch.textSize = d.textSize;
-  if (d.barFontSize) patch.barFontSize = d.barFontSize;
+  if (d.barFontSize) patch.barFontSize = Math.max(BAR_FONT.min, d.barFontSize);
+  if (d.fitBarText !== undefined) patch.fitBarText = d.fitBarText;
   if (d.ganttSize) patch.ganttSize = d.ganttSize;
   if (d.ganttCols) patch.ganttCols = d.ganttCols;
   if (Object.keys(patch).length) savePrefs(patch);

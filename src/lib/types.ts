@@ -80,6 +80,7 @@ export type UserPreferences = {
   tableCollapsed?: number[]; // צוותים שמקטע שלהם מכווץ בטבלת התכולות
   viewOnly?: boolean; // "מצב צפייה בלבד": המשתמש בחר לא לערוך (גם אם יש לו הרשאות) — מונע שינויים בטעות
   barFontSize?: number;
+  fitBarText?: boolean;
   ganttSize?: { weekW?: number; rowH?: number }; // הגדרות תצוגה מתקדמות: רוחב עמודת שבוע וגובה שורה בגאנט (פיקסלים). ריק = לפי הצפיפות
   ganttCols?: { domain: number; team: number }; // רוחב עמודות "תחום" ו"צוות" בגאנט (פיקסלים) // גודל הטקסט בתוך קוביות הגאנט (פיקסלים)
 };
@@ -105,6 +106,7 @@ export type ViewConfig = {
 export type ViewDisplay = {
   textSize?: TextSize;
   barFontSize?: number;
+  fitBarText?: boolean;
   ganttSize?: { weekW?: number; rowH?: number };
   ganttCols?: { domain: number; team: number };
 };

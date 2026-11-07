@@ -11,7 +11,7 @@ export const STATUS_META: Record<Status, { label: string; bg: string; fg: string
   IN_PROGRESS: { label: "בביצוע", bg: "#f59e0b", fg: "#3b2300", border: "#d48806" },
   DONE: { label: "בוצע", bg: "#15803d", fg: "#ffffff", border: "#116b33" },
   DONE_UNPLANNED: { label: "בוצע ולא תוכנן", bg: "#86efac", fg: "#14532d", border: "#4ade80" },
-  BLOCKED: { label: "חסום / קיימת בעיה", bg: "#dc2626", fg: "#ffffff", border: "#b91c1c" },
+  BLOCKED: { label: "לא בוצע", bg: "#dc2626", fg: "#ffffff", border: "#b91c1c" },
   WAITING: { label: "ממתין לצוות אחר", bg: "#7dd3fc", fg: "#0c4a6e", border: "#38bdf8" },
   POSTPONED: { label: "נדחה", bg: "#fde047", fg: "#4d3d00", border: "#eab308" },
   CANCELLED: { label: "בוטל", bg: "#52525b", fg: "#f4f4f5", border: "#3f3f46" },

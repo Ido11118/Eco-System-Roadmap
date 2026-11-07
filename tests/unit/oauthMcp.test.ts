@@ -48,11 +48,14 @@ describe("mcp week parsing", () => {
     expect(parseWeek("W45/2026")).toBe("2026-11-01");
     expect(parseWeek("2026-W45")).toBe("2026-11-01");
     expect(parseWeek("שבוע 45 2026")).toBe("2026-11-01");
-    expect(parseWeek("1/2026")).toBe("2025-12-28"); // שבוע 1 = השבוע שבו חל ה-1 בינואר
+    expect(parseWeek("53/2026")).toBe("2026-12-27");
+    expect(parseWeek("1/2027")).toBe("2027-01-03");
+    expect(parseWeek("1/2026")).toBe("2025-12-28"); // תחילת שבוע 1 של 2026 נשארת ללא שינוי
   });
   it("rejects what it cannot understand, with a helpful message", () => {
     expect(() => parseWeek("next tuesday")).toThrow(/N\/YYYY/);
     expect(() => parseWeek("54/2026")).toThrow();
+    expect(() => parseWeek("53/2027")).toThrow();
     expect(() => parseDate("2026-02-30")).toThrow();
     expect(parseDate("2026-02-28")).toBe("2026-02-28");
   });

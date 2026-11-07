@@ -11,7 +11,7 @@ describe("weeks", () => {
     // שבת 23:30 UTC = ראשון 02:30 בישראל (שעון קיץ) — כבר שבוע חדש
     expect(W.currentWeekIL(new Date("2026-10-10T23:30:00Z"))).toBe("2026-10-11");
   });
-  it("org week numbering: week 1 is the week that contains January 1st", () => {
+  it("week labels follow Monday ISO numbering while dates remain Sunday–Saturday", () => {
     expect(W.weekYearStart(2026)).toBe("2025-12-28");
     expect(W.weekNumber("2025-12-28")).toBe(1); // 28/12/2025–03/01/2026
     expect(W.weekYear("2025-12-28")).toBe(2026);
@@ -19,9 +19,25 @@ describe("weeks", () => {
     expect(W.weekNumber("2026-10-11")).toBe(42);
     expect(W.sundayOfWeekNumber(2026, 43)).toBe("2026-10-18");
     expect(W.weekNumber("2026-12-20")).toBe(52);
-    expect([W.weekNumber("2026-12-27"), W.weekYear("2026-12-27")]).toEqual([1, 2027]); // 27/12/2026–02/01/2027
+    expect([W.weekNumber("2026-12-27"), W.weekYear("2026-12-27")]).toEqual([53, 2026]); // 27/12/2026–02/01/2027
     expect([W.weekNumber("2023-01-01"), W.weekYear("2023-01-01")]).toEqual([1, 2023]); // שנה שמתחילה ביום ראשון
-    expect(W.weekLabel("2026-12-27")).toBe("שבוע 1 (2027)");
+    expect(W.weekLabel("2026-12-27")).toBe("שבוע 53 (2026)");
+  });
+  it("starts 2027 on January 3 and round-trips week 53 of 2026", () => {
+    expect(W.weekYearStart(2027)).toBe("2027-01-03");
+    expect([W.weekNumber("2027-01-03"), W.weekYear("2027-01-03")]).toEqual([1, 2027]);
+    expect(W.weekNumber("2027-01-10")).toBe(2);
+    expect(W.sundayOfWeekNumber(2026, 53)).toBe("2026-12-27");
+    expect(W.sundayOfWeekNumber(2027, 1)).toBe("2027-01-03");
+    const t = W.buildTimeline("2026-12-20", "2027-01-10");
+    expect(t.weeks.map((w) => [w.start, w.num])).toEqual([["2026-12-20", 52], ["2026-12-27", 53], ["2027-01-03", 1], ["2027-01-10", 2]]);
+  });
+  it("round-trips every Sunday across leap years and every New Year weekday", () => {
+    for (let day = "2000-01-02"; day <= "2040-12-30"; day = W.addWeeks(day, 1)) {
+      const year = W.weekYear(day), num = W.weekNumber(day);
+      expect(num).toBeGreaterThanOrEqual(1); expect(num).toBeLessThanOrEqual(53);
+      expect(W.sundayOfWeekNumber(year, num)).toBe(day);
+    }
   });
   it("timeline handles month/year boundaries and real month lengths", () => {
     const t = W.buildTimeline("2025-12-01", "2026-03-31");
