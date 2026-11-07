@@ -63,7 +63,7 @@ async function main() {
     await page.getByTestId("bar-font-input").fill("16"); await page.getByTestId("bar-font-input").press("Enter"); assert.equal((await saved).status(), 200);
     await waitFont(short.id, 16); await waitFont(long.id, 10);
     assert((await font(medium.id)) <= 16);
-    await page.keyboard.press("Escape"); await page.screenshot({ path: "/workspace/.setup/display-fit.png" });
+    await page.keyboard.press("Escape"); if (process.env.SHOTS_DIR) await page.screenshot({ path: `${process.env.SHOTS_DIR}/display-fit.png` }); // צילום רק כשמבקשים (התיקייה הקודמת הייתה קבועה לסביבה אחת)
     await page.reload(); await label(short.id).waitFor(); await waitFont(short.id, 16); await waitFont(long.id, 10);
     await page.getByTestId("display-options").click(); assert.equal(await page.getByTestId("fit-bar-text").isChecked(), true);
     saved = page.waitForResponse((r) => r.url().endsWith("/api/me/preferences") && r.request().method() === "PATCH");

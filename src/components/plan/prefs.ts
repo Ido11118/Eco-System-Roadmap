@@ -50,9 +50,9 @@ export function useBarFontSize(initial: UserPreferences): [number, (n: number) =
 }
 
 export function useFitBarText(initial: UserPreferences): [boolean, (enabled: boolean) => void] {
-  const [v, setV] = useState(() => currentPrefs(initial).fitBarText ?? false);
+  const [v, setV] = useState(() => currentPrefs(initial).fitBarText ?? true);
   useEffect(() => {
-    const listener = () => setV(cache?.fitBarText ?? false);
+    const listener = () => setV(cache?.fitBarText ?? true);
     listeners.add(listener); return () => { listeners.delete(listener); };
   }, []);
   return [v, (fitBarText) => savePrefs({ fitBarText })];
@@ -111,7 +111,7 @@ export function useTextSize(initial: UserPreferences): [TextSize, (t: TextSize) 
 export function currentDisplay(): ViewDisplay {
   const p = cache ?? {};
   return {
-    textSize: p.textSize ?? "md", barFontSize: Math.max(BAR_FONT.min, p.barFontSize ?? BAR_FONT.def), fitBarText: p.fitBarText ?? false, ganttSize: p.ganttSize ?? {},
+    textSize: p.textSize ?? "md", barFontSize: Math.max(BAR_FONT.min, p.barFontSize ?? BAR_FONT.def), fitBarText: p.fitBarText ?? true, ganttSize: p.ganttSize ?? {},
     ganttCols: colsOf(p),
   };
 }

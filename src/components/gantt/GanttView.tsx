@@ -382,7 +382,7 @@ export const GanttView = memo(forwardRef<GanttHandle, { store: PlanStore; view: 
           opts?.invalid && "!border-red-500 !bg-red-100 !text-red-700 ring-2 ring-red-300",
           isDragged && "opacity-30",
           dim && "opacity-25",
-          (selected || summary?.itemId === i.id) && "ring-2 ring-brand-500 ring-offset-1",
+          (selected || summary?.itemId === i.id) && "is-selected",
           box.cutStart && "rounded-r-none border-r-dashed",
           box.cutEnd && "rounded-l-none")}
         style={{ right: box.right, width: box.width, top: 3, height: height - 6, background: m.bg, color: m.fg, borderColor: m.border, fontSize: barFont }}

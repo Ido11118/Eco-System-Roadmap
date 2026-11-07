@@ -326,8 +326,8 @@ function DisplayOptions({ view, setView, mode }: { view: ViewConfig; setView: (v
                   <SizeControl label="גודל המלל בקוביות" unit="px" value={barFont} min={BAR_FONT.min} max={BAR_FONT.max}
                     onChange={setBarFont} testid="bar-font" />
                   <p className="text-[11px] leading-snug text-ink-400">כשגובה השורה מספיק לשתי שורות טקסט, שם ארוך ממשיך לשורה השנייה במקום להיחתך.</p>
-                  {(custom || barFont !== BAR_FONT.def || fitText) && (
-                    <button className="text-[12px] text-brand-600 hover:underline" onClick={() => { setGSize({}); setBarFont(BAR_FONT.def); setFitText(false); }} data-testid="advanced-reset">איפוס לברירת המחדל</button>
+                  {(custom || barFont !== BAR_FONT.def || !fitText) && (
+                    <button className="text-[12px] text-brand-600 hover:underline" onClick={() => { setGSize({}); setBarFont(BAR_FONT.def); setFitText(true); }} data-testid="advanced-reset">איפוס לברירת המחדל</button>
                   )}
                 </div>
               )}

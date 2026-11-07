@@ -2,7 +2,7 @@
 // מסגרת האפליקציה: סרגל צד (ניווט בין התצוגות) + אזור התוכן.
 // סרגל הצד מחליף את כפתורי הניווט שהיו בסרגל העליון — כדי להפחית עומס במסך המרכזי.
 import Link from "next/link";
-import { createContext, useContext, useState } from "react";
+import { createContext, Fragment, useContext, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
@@ -62,7 +62,8 @@ function Sidebar({ me, active, action, mobile, onNavigate }: { me: Me; active: N
   const pending = usePendingCount(isSuper).data?.count ?? 0;
   const toggle = () => { const v = !collapsedPref; setCollapsed(v); savePrefs({ sidebarCollapsed: v }); };
 
-  const items: { key: NavKey; href: string; label: string; icon: React.ReactNode; badge?: number; testid: string }[] = [
+  // onlyMe: פריטים שרק מנהל המערכת רואה — מוצגים בתחתית, מתחת לקו מפריד
+  const items: { key: NavKey; href: string; label: string; icon: React.ReactNode; badge?: number; testid: string; onlyMe?: boolean }[] = [
     { key: "gantt", href: "/plan?view=gantt", label: "גאנט עדכני", icon: <GanttChart size={17} />, testid: "mode-gantt" },
     { key: "table", href: "/plan?view=table", label: "תכולות", icon: <Table2 size={17} />, testid: "mode-table" },
     // באקלוג: רק למי שעורך תחום (הרשימה משותפת עם עורכי התחום בלבד)
@@ -70,9 +71,8 @@ function Sidebar({ me, active, action, mobile, onNavigate }: { me: Me; active: N
     { key: "compare", href: "/plan?view=compare", label: "תכנון מול ביצוע", icon: <GitCompareArrows size={17} />, testid: "mode-compare" },
     { key: "snapshots", href: "/snapshots", label: "תמונות מצב", icon: <Camera size={17} />, testid: "nav-snapshots" },
   ];
-  if (isSuper) items.push({ key: "admin", href: "/admin", label: "ניהול מערכת", icon: <ShieldCheck size={17} />, badge: pending, testid: "nav-admin" });
-
-  if (isSuper) items.push({ key: "personal", href: "/my-gantt", label: "הגאנט שלי", icon: <GanttChart size={17} />, testid: "nav-personal-gantt" });
+  if (isSuper) items.push({ key: "admin", href: "/admin", label: "ניהול מערכת", icon: <ShieldCheck size={17} />, badge: pending, testid: "nav-admin", onlyMe: true });
+  if (isSuper) items.push({ key: "personal", href: "/my-gantt", label: "הגאנט שלי", icon: <GanttChart size={17} />, testid: "nav-personal-gantt", onlyMe: true });
 
   return (
     <aside className={clsx("flex shrink-0 flex-col border-l border-ink-200 bg-[#fbfcfe] transition-[width] duration-150", collapsed ? "w-[56px]" : "w-[196px]")}
@@ -82,14 +82,16 @@ function Sidebar({ me, active, action, mobile, onNavigate }: { me: Me; active: N
         {!collapsed && <span className="truncate text-[14px] font-bold text-ink-900">תוכנית עבודה</span>}
       </Link>
       <nav className="flex flex-1 flex-col gap-0.5 p-2">
-        {items.map((it) => {
+        {items.map((it, idx) => {
           const on = it.key === active;
+          const separator = it.onlyMe && !items[idx - 1]?.onlyMe;
           return (
-            <Link key={it.key} href={it.href} data-testid={it.testid} aria-current={on ? "page" : undefined} onClick={onNavigate}
+            <Fragment key={it.key}>
+            {separator && <div className="mx-1 my-2 border-t border-ink-200" role="separator" title="מתחת לקו — רק אצלך" data-testid="sidebar-private-separator" />}
+            <Link href={it.href} data-testid={it.testid} aria-current={on ? "page" : undefined} onClick={onNavigate}
               title={collapsed ? it.label : undefined}
               className={clsx("relative flex h-9 items-center gap-2.5 rounded-md px-2.5 text-[13px] font-medium transition-colors",
-                on ? "bg-brand-50 text-brand-700" : "text-ink-700 hover:bg-ink-100 hover:text-ink-900",
-                it.key === "admin" && "mt-3")}>
+                on ? "bg-brand-50 text-brand-700" : "text-ink-700 hover:bg-ink-100 hover:text-ink-900")}>
               {on && <span className="absolute inset-y-1.5 right-0 w-[3px] rounded-l bg-brand-600" />}
               <span className="relative shrink-0">
                 {it.icon}
@@ -98,6 +100,7 @@ function Sidebar({ me, active, action, mobile, onNavigate }: { me: Me; active: N
               {!collapsed && <span className="flex-1 truncate">{it.label}</span>}
               {!!it.badge && !collapsed && <Badge n={it.badge} />}
             </Link>
+            </Fragment>
           );
         })}
       </nav>

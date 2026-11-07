@@ -69,6 +69,9 @@ body {
 .gantt-month-start { box-shadow: inset -1px 0 0 var(--line-strong); }
 .gantt-bar { transition: box-shadow .12s, transform .12s; }
 .gantt-bar:hover { box-shadow: 0 2px 8px rgba(15, 23, 42, .18); }
+/* קובייה נבחרת: מסגרת כחולה (גם בבחירה מרובה) — נשארת גם כשהעכבר עליה (ה-hover לא דורס אותה) */
+.gantt-bar.is-selected { box-shadow: 0 0 0 1px #fff, 0 0 0 3px #3b82f6; }
+.gantt-bar.is-selected:hover { box-shadow: 0 0 0 1px #fff, 0 0 0 3px #3b82f6, 0 2px 8px rgba(15, 23, 42, .18); }
 .gantt-bar.dragging { opacity: .9; box-shadow: 0 6px 18px rgba(15, 23, 42, .25); z-index: 30; }
 .plan-ghost {
   background: repeating-linear-gradient(-45deg, rgba(100,116,139,.10) 0 4px, rgba(100,116,139,.02) 4px 8px);
